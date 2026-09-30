@@ -1,0 +1,16 @@
+# @package _global_
+# scripts/python/06_policy_search.py: an evolutionary search over a parametric policy on cached references
+defaults:
+  - main
+  - _self_
+
+entropy: 20261002 # your own training root (any integer but 0, the public dev root); the search trains on it
+train_episodes: 16 # episodes of `entropy` the fitness plays
+holdout: dev # the held-out check on the public dev root: dev (the dev split), a count or a list
+generations: 6
+population: 8 # candidates per generation
+elite: 3 # candidates kept as parents
+sigma: 0.15 # mutation scale (the parameters live in [0, 1] and [0, 3])
+quick: false # true: a rough naive rule, no harm levels, 4 held-out episodes: seconds, not the board's numbers
+n_jobs: -1 # workers of the references' first computation (-1: all cores)
+# seed (main.yaml): the search's generator; the best candidate goes to outputs/06_policy_search/<run_name>/best/

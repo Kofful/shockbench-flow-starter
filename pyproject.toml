@@ -1,0 +1,134 @@
+[build-system]
+requires = ["hatchling", "tomli"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shockbench-flow-starter"
+version = "0.1.0"
+description = "Starter kit for the ShockBench-Flow hackathon: examples, submission agents and submission tools"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "nuinashco", email = "nuinashco@users.noreply.github.com" }
+]
+keywords = ["gymnasium", "reinforcement-learning", "benchmark", "hackathon"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# SciPy 1.18.1 (the scoring image's) needs Python 3.12 or later; the scoring image runs 3.13
+requires-python = ">=3.12,<3.14"
+
+dependencies = [
+    # the benchmark: environments (gymnasium), the agent kit and the local evaluation. Unpinned on purpose: its one
+    # source is the wheel in vendor/ ([tool.uv.sources] below, the only line a new wheel changes in this file)
+    "shockbench-flow[gym]",
+
+    # the template's core dependencies that this repository uses
+    "rootutils >= 1.0.7",
+    "hydra-core == 1.3.2",
+    "omegaconf ~= 2.3.0",
+    "python-dotenv ~= 1.2.2",
+    "rich >= 14.2.0, < 15",
+    "loguru ~= 0.7.3",
+    "fire ~= 0.7.1",
+    "joblib ~= 1.5.2",
+    "pydantic >= 2.11.1, < 3",
+    "pandas >= 2.3.0, < 4",
+]
+
+[project.optional-dependencies]
+# reinforcement learning (scripts/python/05_train_ppo.py): Stable-Baselines3 and PyTorch; `uv sync --extra rl`
+rl = ["shockbench-flow[rl]"]
+
+[project.scripts]
+# the submission tooling: `uv run sbf <command> --help`
+sbf = "sbf_starter.cli:main"
+
+[dependency-groups]
+# yours: `uv add --group mine <package>` (installed by every `uv sync`; the organisers never edit this group)
+mine = []
+dev = [
+    {include-group = "lint"},
+    {include-group = "test"},
+]
+lint = [
+    "pre-commit",
+    "ruff",
+]
+test = [
+    "pytest",
+    "pytest-env",
+    "pytest-xdist",
+]
+
+[tool.uv]
+default-groups = ["dev", "mine"]
+
+[tool.uv.sources]
+# shockbench-flow comes from this file only, never from an index: a package of the same name on PyPI cannot replace it
+# (a `find-links = ["vendor"]` would let a higher PyPI version win, and an explicit flat index writes this checkout's
+# absolute path into uv.lock). A new wheel changes this line, vendor/ and uv.lock, none of which you edit.
+shockbench-flow = { path = "vendor/shockbench_flow-0.1.1-py3-none-any.whl" }
+# torch's CPU build on Linux (PyPI's Linux wheel bundles CUDA); macOS and Windows take PyPI's
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sbf_starter", "src/helper", "src/hydra_plugins", "my"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+exclude = [
+    ".git",
+    "__pycache__",
+    ".ruff_cache",
+    ".github",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "D"]  # all rules can be found here: https://beta.ruff.rs/docs/rules/
+ignore=[
+    "E203",         # space before : (needed for how black formats slicing)
+    "E731",         # do not assign a lambda expression, use a def
+    "E741",         # do not use variables named 'l', 'O', or 'I'
+    "F403",         # unable to detect undefined names
+    "D100",         # missing docstring in public module
+    "D101",         # missing docstring in public class
+    "D102",         # missing docstring in public method
+    "D103",         # missing docstring in public function
+    "D104",         # missing docstring in public package
+    "D105",         # missing docstring in magic method
+    "D107",         # missing docstring in `__init__`
+    "D203",         # incorrect-blank-line-before-class
+    "D213",         # multi-line-summary-second-line
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/python/*"=["E402"]
+"my/scripts/*"=["E402"]
+"src/helper/*"=["D416"]  # the template's helpers, kept as they are
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # the Google style the template asks for (docstrings may open with a noun phrase)
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+known-first-party = ["sbf_starter", "helper", "my"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "my/tests"]
+pythonpath = ["src", "."]
+addopts = "-ra"
+markers = ["docker: builds the scoring container locally and needs a Docker daemon; run with --docker"]

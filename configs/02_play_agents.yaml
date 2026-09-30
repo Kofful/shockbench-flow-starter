@@ -1,0 +1,7 @@
+# @package _global_
+# scripts/python/02_play_agents.py: the Agent format played under gymnasium, random against send-the-maximum
+defaults:
+  - main
+  - _self_
+
+episodes: 3 # dev episodes 0 .. episodes - 1

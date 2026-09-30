@@ -1,0 +1,14 @@
+# Hydra's own settings: logging is Loguru's (helper.logging), so Hydra configures none; every run gets its folder
+# outputs/<script>/<run_name>/ (sbf_starter.runs writes config.yaml and meta.json there); Hydra writes nothing else.
+defaults:
+  - override hydra_logging: none
+  - override job_logging: none
+
+output_subdir: null
+job:
+  chdir: false
+run:
+  dir: outputs/${hydra.job.name}/${run_name}
+sweep:
+  dir: outputs/${hydra.job.name}/${run_name}
+  subdir: ${hydra.job.num}

@@ -1,0 +1,22 @@
+# @package _global_
+# scripts/python/05_train_ppo.py: PPO (Stable-Baselines3) exported as a TorchScript submission; needs the rl extra
+# (`uv sync --extra rl`). Every setting of the training lives here (sbf_starter.ppo.train reads them all).
+defaults:
+  - main
+  - _self_
+
+total_timesteps: 100000 # environment weeks of training (26 an episode on Tiny)
+n_envs: 4 # parallel environments (subprocesses when above 1)
+n_scenarios: 64 # training scenarios drawn from `entropy`
+entropy: 20260928 # your own training root: any integer but 0, the public dev root
+regime: standard # the scored information regime
+check_episodes: 2 # episodes on which the exported agent must act as the SB3 policy
+net_arch: [64, 64] # hidden layers of the policy and of the value network
+activation: tanh # between them: tanh, relu, elu, leaky_relu, gelu or silu
+n_steps: null # null: 8 whole episodes per environment per rollout
+batch_size: null # null: n_steps
+learning_rate: 0.0003
+gamma: 0.99
+max_minutes: null # stop training after this many minutes of wall time (null: never)
+torch_threads: 1 # the network is small: more threads only compete with the environment workers
+# seed (main.yaml): PPO's seed; the run writes outputs/05_train_ppo/<run_name>/ (submission/, submission.zip, ...)

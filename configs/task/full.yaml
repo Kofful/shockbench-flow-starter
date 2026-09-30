@@ -1,0 +1,3 @@
+# Full: the private board's network (72 nodes, 369 edges, 104 weeks, 395 flows slots)
+name: full
+env_id: ShockBench/Full-v0

@@ -1,0 +1,8 @@
+# The config every entry point composes (defaults: [main, _self_]): the network, the seed and the run's name.
+defaults:
+  - _self_
+  - hydra: default
+  - task: tiny # tiny (practice), small (the public board's network), full (the private board's): `task=small`
+
+seed: 0
+run_name: ${now:%Y-%m-%d_%H-%M-%S} # the run's folder, outputs/<script>/<run_name>/ (`run_name=baseline`)

@@ -1,0 +1,13 @@
+# @package _global_
+# scripts/python/04_evaluate.py: the local score, as `sbf evaluate` (and `sbf compare` with `against`) computes it
+defaults:
+  - main
+  - _self_
+
+agent: template # an agent's name (agents/<name>, or a shipped one), a submission folder or zip, or an agent.py file
+against: null # another agent: compare the two on the same episodes (a paired interval), as `sbf compare`
+episodes: dev # dev (20 public episodes, 5 per harm level), a count k (episodes 0..k-1) or a list
+quick: false # true: a rough naive rule, no harm levels, 4 episodes: seconds, not the board's numbers (= sbf --quick)
+entropy: 0 # 0: the public dev episodes; any other integer: a root of your own
+cpu_budget: false # true: a week over the task's CPU budget is played by the naive rule, as on the server
+n_jobs: -1 # workers of a first run's reference computation (-1: all cores)
