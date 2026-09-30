@@ -1,8 +1,0 @@
-# @package _global_
-# scripts/python/01_quickstart.py: one episode with random actions, the standard gymnasium loop
-defaults:
-  - main
-  - _self_
-
-episode: 0 # the dev episode: env.reset(options={"episode": episode}) replays it exactly
-# seed (main.yaml): the action space's sampler

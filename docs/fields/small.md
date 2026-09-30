@@ -1,4 +1,4 @@
-Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run sbf fields --task=small`.
+Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run python scripts/fields_docs.py`.
 
 **Observation** (`act(observation)`): a dict of numpy arrays. Every key below except `action_mask.observed` and `override_mask.observed` is followed by `<key>.observed`, an int8 array of the same shape, 1 where the value is present and 0 where it is unobserved or padding (the value is then 0).
 
@@ -13,7 +13,7 @@ Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run
 | `pipeline.qty` | (269,) | float64 | grouped list | the group's total quantity; its observed-mask marks the live entries |
 | `pipeline.arrival_week` | (269,) | int64 | grouped list | week the group reaches the edge's head |
 | `queue_lots.qty` | (77, 52) | float64 | layout.lot_keys x week | quantity waiting at a chokepoint, one row per (chokepoint, k, lane, next edge) of layout.lot_keys, one column per week the lots reached it (column w - 1 is week w; their FIFO cohort): the total of those lots, observed where lots wait |
-| `wip.node` | (54,) | int64 | padded list | work in process at fabs and OSATs (gross, Q69): node |
+| `wip.node` | (54,) | int64 | padded list | work in process at fabs and OSATs (gross): node |
 | `wip.k` | (54,) | int64 | padded list | output commodity |
 | `wip.qty` | (54,) | float64 | padded list | quantity |
 | `wip.out_week` | (54,) | int64 | padded list | week it becomes stock |
@@ -22,18 +22,18 @@ Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run
 | `graph_now.tau` | (115,) | int64 | edges | lead time in weeks per edge |
 | `graph_now.prohibited` | (115, 8) | int8 | edges x commodities | 1 where (edge, k) is prohibited (sanctions, export controls) |
 | `graph_now.tariff` | (115, 8) | float64 | edges x commodities | tariff rate on (edge, k) |
-| `graph_now.open` | (7,) | float64 | layout.chokepoints | open fraction o_c of each chokepoint (1 open, 0 closed) |
-| `graph_now.kappa.tb` | (7,) | float64 | layout.chokepoints | throughput kappa_cb of the tanker/bulk pool, (9) |
-| `graph_now.kappa.ct` | (7,) | float64 | layout.chokepoints | throughput kappa_cb of the container pool, (9) |
+| `graph_now.open` | (7,) | float64 | layout.chokepoints | open fraction o_c of each chokepoint (a strait, canal or the Cape route; 1 open, 0 closed) |
+| `graph_now.kappa.tb` | (7,) | float64 | layout.chokepoints | throughput kappa_cb of the tanker/bulk pool |
+| `graph_now.kappa.ct` | (7,) | float64 | layout.chokepoints | throughput kappa_cb of the container pool |
 | `graph_now.war_risk` | (7,) | int64 | layout.chokepoints | war-risk class code: 0 none, 1 red_sea, 2 hormuz_2026 |
 | `graph_now.supply.avail` | (10,) | float64 | layout.supply_slots | supply available at each source and material slot |
-| `graph_now.fab.R` | (6,) | float64 | layout.fabs | restoration factor R_f of each fab, (13) |
-| `graph_now.fab.alpha_bar` | (6,) | float64 | layout.fabs | power multiplier alpha-bar_f of each fab, (13) |
+| `graph_now.fab.R` | (6,) | float64 | layout.fabs | restoration factor R_f of each fab |
+| `graph_now.fab.alpha_bar` | (6,) | float64 | layout.fabs | power multiplier alpha-bar_f of each fab |
 | `graph_now.fab.cap_eff` | (6,) | float64 | layout.fabs | effective wafer capacity of each fab |
-| `graph_now.grid.G_bar` | (4,) | float64 | layout.grids | deliverable generation G-bar_g of each grid, (15) |
-| `graph_now.grid.y_bar` | (4,) | float64 | layout.grids | base load y-bar_g of each grid, (17) |
-| `graph_now.osat.R` | (3,) | float64 | layout.osats | restoration factor R^osat of each OSAT, (13) (Q97) |
-| `graph_now.osat.thr_eff` | (3,) | float64 | layout.osats | effective throughput thr R^osat of each OSAT, (19) |
+| `graph_now.grid.G_bar` | (4,) | float64 | layout.grids | deliverable generation G-bar_g of each grid |
+| `graph_now.grid.y_bar` | (4,) | float64 | layout.grids | base load y-bar_g of each grid |
+| `graph_now.osat.R` | (3,) | float64 | layout.osats | restoration factor R^osat of each OSAT |
+| `graph_now.osat.thr_eff` | (3,) | float64 | layout.osats | effective throughput thr R^osat of each OSAT |
 | `slot_mask` | (108,) | int8 | action slots | 1 where an edge of the slot's route (the edge, or every edge of its lane) is prohibited for its commodity this week (the wire's convention; see action_mask) |
 | `last_week.clip.requested` | (108,) | float64 | action slots | flow you requested last week |
 | `last_week.clip.executed` | (108,) | float64 | action slots | flow executed after the capacity clip |
@@ -42,8 +42,8 @@ Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run
 | `last_week.sinks.served` | (8,) | float64 | layout.demands | last week's demand served |
 | `last_week.sinks.lost` | (8,) | float64 | layout.demands | last week's demand lost |
 | `last_week.shed.qty` | (4,) | float64 | layout.grids | power shed at each grid last week |
-| `demand_forecast.qty` | (8, 8) | float64 | layout.demands x h | demand forecast for weeks t + h, h = 0..7, (48) |
-| `warning.score` | (22,) | float64 | layout.warning_units | early-warning score S^t per region, dyad and chokepoint, (45) |
+| `demand_forecast.qty` | (8, 8) | float64 | layout.demands x h | demand forecast for weeks t + h, h = 0..7 |
+| `warning.score` | (22,) | float64 | layout.warning_units | early-warning score S^t per region, dyad and chokepoint |
 | `messages.msg_id` | (2432,) | int64 | padded list | live announcement threads (announced, not effective, not withdrawn): thread id |
 | `messages.channel` | (2432,) | int64 | padded list | channel code: 0 tariff_formal, 1 tariff_informal, 2 tariff_final, 3 sanction_legal, 4 ties_threat, 5 mid_threat |
 | `messages.kind` | (2432,) | int64 | padded list | message kind code: 0 proposal, 1 final_notice, 2 threat, 3 publication, 4 withdrawal |
@@ -241,7 +241,7 @@ Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run
 | `release_pairs` | 0: chk_hormuz/lng, 1: chk_hormuz/crude, 2: chk_malacca/lng, 3: chk_malacca/crude, 4: chk_suez/lng, 5: chk_suez/crude, 6: chk_cape/lng, 7: chk_cape/crude, 8: chk_taiwan/lng, 9: chk_taiwan/crude, 10: chk_panama/lng, 11: chk_panama/crude, 12: chk_turkish/lng, 13: chk_turkish/crude |
 | `lot_keys` | 0: chk_hormuz/lng/lane.src_qa_lng.term_tw/sea.tb.chk_hormuz.chk_malacca, 1: chk_hormuz/lng/lane.src_qa_lng.term_kr/sea.tb.chk_hormuz.chk_malacca, 2: chk_hormuz/lng/lane.src_qa_lng.term_eu/sea.tb.chk_hormuz.chk_suez, 3: chk_hormuz/lng/lane.src_qa_lng.term_eu.cape/cape.tb.chk_hormuz.chk_cape, 4: chk_hormuz/lng/lane.src_qa_lng.term_tw.lombok/lombok.tb.chk_hormuz.term_tw, 5: chk_hormuz/lng/lane.src_qa_lng.term_kr.lombok/lombok.tb.chk_hormuz.chk_taiwan, 6: chk_hormuz/lng/lane.src_qa_lng.term_kr.east/sea.tb.chk_hormuz.chk_malacca, 7: chk_hormuz/crude/lane.src_gulf_crude.term_kr/sea.tb.chk_hormuz.chk_malacca, 8: chk_hormuz/crude/lane.src_gulf_crude.term_jp/sea.tb.chk_hormuz.chk_malacca, 9: chk_hormuz/crude/lane.src_gulf_crude.term_kr.lombok/lombok.tb.chk_hormuz.chk_taiwan, 10: chk_hormuz/crude/lane.src_gulf_crude.term_jp.lombok/lombok.tb.chk_hormuz.chk_taiwan, 11: chk_hormuz/crude/lane.src_gulf_crude.term_kr.east/sea.tb.chk_hormuz.chk_malacca, 12: chk_hormuz/crude/lane.src_gulf_crude.term_jp.east/sea.tb.chk_hormuz.chk_malacca, 13: chk_malacca/lng/lane.src_qa_lng.term_tw/sea.tb.chk_malacca.term_tw, 14: chk_malacca/lng/lane.src_qa_lng.term_kr/sea.tb.chk_malacca.chk_taiwan, 15: chk_malacca/lng/lane.src_qa_lng.term_kr.east/east.tb.chk_malacca.term_kr, 16: chk_malacca/crude/lane.src_gulf_crude.term_kr/sea.tb.chk_malacca.chk_taiwan, 17: chk_malacca/crude/lane.src_gulf_crude.term_jp/sea.tb.chk_malacca.chk_taiwan, 18: chk_malacca/crude/lane.src_gulf_crude.term_kr.east/east.tb.chk_malacca.term_kr, 19: chk_malacca/crude/lane.src_gulf_crude.term_jp.east/east.tb.chk_malacca.term_jp, 20: chk_malacca/crude/lane.src_gulf_crude.term_kr.bypass/sea.tb.chk_malacca.chk_taiwan, 21: chk_malacca/crude/lane.src_gulf_crude.term_jp.bypass/sea.tb.chk_malacca.chk_taiwan, 22: chk_malacca/wafer/lane.mat_ua_neon.fab_tw_leading_1/sea.ct.chk_malacca.fab_tw_leading_1, 23: chk_malacca/wafer/lane.mat_ua_neon.fab_kr_memory_1/sea.ct.chk_malacca.chk_taiwan, 24: chk_malacca/wafer/lane.mat_ua_neon.fab_tw_leading_1.cape/sea.ct.chk_malacca.fab_tw_leading_1, 25: chk_malacca/wafer/lane.mat_ua_neon.fab_kr_memory_1.cape/sea.ct.chk_malacca.chk_taiwan, 26: chk_malacca/wafer/lane.mat_ua_neon.fab_kr_memory_1.east/east.ct.chk_malacca.fab_kr_memory_1, 27: chk_malacca/chip_le_raw/lane.fab_eu_leading_1.osat_my/sea.ct.chk_malacca.osat_my, 28: chk_malacca/chip_le_raw/lane.fab_eu_leading_1.osat_my.cape/sea.ct.chk_malacca.osat_my, 29: chk_malacca/chip_mat_raw/lane.fab_eu_mature_1.osat_my/sea.ct.chk_malacca.osat_my, 30: chk_malacca/chip_mat_raw/lane.fab_eu_mature_1.osat_my.cape/sea.ct.chk_malacca.osat_my, 31: chk_malacca/chip_mat/lane.osat_my.sink_eu/sea.ct.chk_malacca.chk_suez, 32: chk_malacca/chip_mat/lane.osat_tw.sink_eu/sea.ct.chk_malacca.chk_suez, 33: chk_suez/lng/lane.src_qa_lng.term_eu/sea.tb.chk_suez.term_eu, 34: chk_suez/wafer/lane.mat_ua_neon.fab_tw_leading_1/sea.ct.chk_suez.chk_malacca, 35: chk_suez/wafer/lane.mat_ua_neon.fab_kr_memory_1/sea.ct.chk_suez.chk_malacca, 36: chk_suez/wafer/lane.mat_ua_neon.fab_tw_leading_1.lombok/lombok.ct.chk_suez.fab_tw_leading_1, 37: chk_suez/wafer/lane.mat_ua_neon.fab_kr_memory_1.lombok/lombok.ct.chk_suez.chk_taiwan, 38: chk_suez/wafer/lane.mat_ua_neon.fab_kr_memory_1.east/sea.ct.chk_suez.chk_malacca, 39: chk_suez/chip_le_raw/lane.fab_eu_leading_1.osat_my/sea.ct.chk_suez.chk_malacca, 40: chk_suez/chip_le_raw/lane.fab_eu_leading_1.osat_my.lombok/lombok.ct.chk_suez.osat_my, 41: chk_suez/chip_mat_raw/lane.fab_eu_mature_1.osat_my/sea.ct.chk_suez.chk_malacca, 42: chk_suez/chip_mat_raw/lane.fab_eu_mature_1.osat_my.lombok/lombok.ct.chk_suez.osat_my, 43: chk_suez/chip_mat/lane.osat_my.sink_eu/sea.ct.chk_suez.sink_eu, 44: chk_suez/chip_mat/lane.osat_tw.sink_eu/sea.ct.chk_suez.sink_eu, 45: chk_cape/lng/lane.src_qa_lng.term_eu.cape/cape.tb.chk_cape.term_eu, 46: chk_cape/wafer/lane.mat_ua_neon.fab_tw_leading_1.cape/cape.ct.chk_cape.chk_malacca, 47: chk_cape/wafer/lane.mat_ua_neon.fab_kr_memory_1.cape/cape.ct.chk_cape.chk_malacca, 48: chk_cape/chip_le_raw/lane.fab_eu_leading_1.osat_my.cape/cape.ct.chk_cape.chk_malacca, 49: chk_cape/chip_mat_raw/lane.fab_eu_mature_1.osat_my.cape/cape.ct.chk_cape.chk_malacca, 50: chk_taiwan/lng/lane.src_qa_lng.term_kr/sea.tb.chk_taiwan.term_kr, 51: chk_taiwan/lng/lane.src_qa_lng.term_kr.lombok/sea.tb.chk_taiwan.term_kr, 52: chk_taiwan/crude/lane.src_gulf_crude.term_kr/sea.tb.chk_taiwan.term_kr, 53: chk_taiwan/crude/lane.src_gulf_crude.term_jp/sea.tb.chk_taiwan.term_jp, 54: chk_taiwan/crude/lane.src_gulf_crude.term_kr.lombok/sea.tb.chk_taiwan.term_kr, 55: chk_taiwan/crude/lane.src_gulf_crude.term_jp.lombok/sea.tb.chk_taiwan.term_jp, 56: chk_taiwan/crude/lane.src_gulf_crude.term_kr.bypass/sea.tb.chk_taiwan.term_kr, 57: chk_taiwan/crude/lane.src_gulf_crude.term_jp.bypass/sea.tb.chk_taiwan.term_jp, 58: chk_taiwan/wafer/lane.mat_ua_neon.fab_kr_memory_1/sea.ct.chk_taiwan.fab_kr_memory_1, 59: chk_taiwan/wafer/lane.mat_ua_neon.fab_kr_memory_1.cape/sea.ct.chk_taiwan.fab_kr_memory_1, 60: chk_taiwan/wafer/lane.mat_ua_neon.fab_kr_memory_1.lombok/sea.ct.chk_taiwan.fab_kr_memory_1, 61: chk_taiwan/chip_le_raw/lane.fab_kr_memory_1.osat_my/sea.ct.chk_taiwan.osat_my, 62: chk_taiwan/chip_le_raw/lane.fab_jp_memory_1.osat_my/sea.ct.chk_taiwan.osat_my, 63: chk_taiwan/chip_mat/lane.osat_my.sink_cn/sea.ct.chk_taiwan.sink_cn, 64: chk_taiwan/chip_mat/lane.osat_my.sink_jp/sea.ct.chk_taiwan.sink_jp, 65: chk_panama/lng/lane.src_us_lng.term_tw/sea.tb.chk_panama.term_tw, 66: chk_panama/lng/lane.src_us_lng.term_jp/sea.tb.chk_panama.term_jp, 67: chk_panama/crude/lane.src_us_crude.term_tw/sea.tb.chk_panama.term_tw, 68: chk_turkish/wafer/lane.mat_ua_neon.fab_tw_leading_1/sea.ct.chk_turkish.chk_suez, 69: chk_turkish/wafer/lane.mat_ua_neon.fab_kr_memory_1/sea.ct.chk_turkish.chk_suez, 70: chk_turkish/wafer/lane.mat_ua_neon.fab_eu_leading_1/sea.ct.chk_turkish.fab_eu_leading_1, 71: chk_turkish/wafer/lane.mat_ua_neon.fab_eu_mature_1/sea.ct.chk_turkish.fab_eu_mature_1, 72: chk_turkish/wafer/lane.mat_ua_neon.fab_tw_leading_1.cape/cape.ct.chk_turkish.chk_cape, 73: chk_turkish/wafer/lane.mat_ua_neon.fab_kr_memory_1.cape/cape.ct.chk_turkish.chk_cape, 74: chk_turkish/wafer/lane.mat_ua_neon.fab_tw_leading_1.lombok/sea.ct.chk_turkish.chk_suez, 75: chk_turkish/wafer/lane.mat_ua_neon.fab_kr_memory_1.lombok/sea.ct.chk_turkish.chk_suez, 76: chk_turkish/wafer/lane.mat_ua_neon.fab_kr_memory_1.east/sea.ct.chk_turkish.chk_suez |
 
-**Static tables** (`config['static']`): a table is a dict of equal-length lists, one entry per node, edge, lane, commodity, slot or sink, and the indices above point into them.
+**Static tables** (`config['static']`, the episode's public tables): a table is a dict of equal-length lists, one entry per node, edge, lane, commodity, slot or sink, and the indices above point into them.
 
 | field | here | meaning |
 | --- | --- | --- |
@@ -252,7 +252,7 @@ Generated for instance `chokepoint-small` (T = 52, regime `standard`) by `uv run
 | `units` | chip_le: wafer-eq 300 mm, chip_le_raw: wafer-eq 300 mm, chip_mat: wafer-eq 300 mm, chip_mat_raw: wafer-eq 300 mm, cost: USD, crude: GWh fuel, lng: GWh fuel, nucfuel: GWh fuel, wafer: wafer-eq 300 mm | the unit of each commodity's quantities, and of costs |
 | `regions` | 14 entries | region names: `nodes.region`, `messages.region`, `dyads.*` and the warning's region units index them |
 | `nodes.id` | 38 entries | node name |
-| `nodes.type` | 38 entries | source, terminal, grid, chokepoint, material, fab, osat or sink |
+| `nodes.type` | 38 entries | source, terminal, grid, chokepoint (a strait, canal or the Cape route), material, fab, osat or sink |
 | `nodes.region` | 38 entries | region index |
 | `commodities.id` | 8 entries | commodity name |
 | `commodities.v` | 8 entries | customs value v_k, USD per unit |

@@ -1,94 +1,27 @@
-# Patterns with a leading slash apply at the repository's root only, so a folder of yours (agents/<name>/weights/,
-# agents/<name>/data/, my/data/) is never ignored by accident. Everything under agents/ is committed except caches
-# (see the end): weights and data your agent loads belong in its folder.
-
-# Python caches and builds
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-/build/
-/develop-eggs/
-/dist/
-/downloads/
-/eggs/
-/.eggs/
-/lib/
-/lib64/
-/parts/
-/sdist/
-/var/
-/wheels/
-/share/python-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-pip-log.txt
-pip-delete-this-directory.txt
+/build/
+/dist/
+.venv/
 
-# test, coverage and type-checker caches
-/htmlcov/
-/.tox/
-/.nox/
-.coverage
-.coverage.*
-.cache
-coverage.xml
-*.cover
-.hypothesis/
+# tools
 .pytest_cache/
-.mypy_cache/
-.dmypy.json
-dmypy.json
 .ruff_cache/
-.pyre/
-/.test-state/
+.mypy_cache/
+.ipynb_checkpoints/
+.coverage
 
-# notebooks
-.ipynb_checkpoints
-profile_default/
-ipython_config.py
-
-# environments and secrets: .env holds your Codabench credentials
+# secrets: .env holds your Codabench token
 .env
 .env.*
 !.env.example
-.venv
-/env/
-/venv/
-/ENV/
-/env.bak/
-/venv.bak/
 
 # editors and systems
-.idea
-.vscode
+.idea/
+.vscode/
 .DS_Store
-.spyderproject
-.spyproject
-.ropeproject
 
-# run outputs, data and scratch at the root (the examples write /outputs/<script>/<run_name>/)
+# run folders and zips (the examples and `sbf pack` write here)
 /outputs/
-/data/
-/weights/
-/logs/
-/runs/
-/wandb/
-/tensorboard/
-/lightning_logs/
-/trash/
-/tmp/
-/docs/build/
-/scripts/python/999-*.py
-/docs/999-*.md
-*.log
-*.zip
-
-# yours: everything under agents/ is committed (weights, zips, logs of a folder), caches excepted
-!/agents/**
-/agents/**/__pycache__/
-/agents/**/*.py[cod]
-/agents/**/.DS_Store

@@ -1,9 +1,0 @@
-# @package _global_
-# scripts/python/03_heuristic_agent.py: the strait rule (heuristic) against send-the-maximum, where a strait closes
-defaults:
-  - main
-  - _self_
-
-episodes: 3 # the first `episodes` dev episodes in which a strait closes below min_open open
-min_open: 0.5 # how far the strait's observed open fraction must fall
-search: 60 # dev episodes 0 .. search - 1 to look through

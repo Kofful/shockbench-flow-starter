@@ -1,4 +1,4 @@
-Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run sbf fields --task=tiny`.
+Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run python scripts/fields_docs.py`.
 
 **Observation** (`act(observation)`): a dict of numpy arrays. Every key below except `action_mask.observed` and `override_mask.observed` is followed by `<key>.observed`, an int8 array of the same shape, 1 where the value is present and 0 where it is unobserved or padding (the value is then 0).
 
@@ -21,7 +21,7 @@ Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run 
 | `queue_lots.arrival_week` | (128,) | int64 | padded list | week the lot reached the chokepoint |
 | `queue_lots.dispatch_week` | (128,) | int64 | padded list | week the lot was dispatched |
 | `queue_lots.entry_edge` | (128,) | int64 | padded list | edge the lot entered the chokepoint by |
-| `wip.node` | (128,) | int64 | padded list | work in process at fabs and OSATs (gross, Q69): node |
+| `wip.node` | (128,) | int64 | padded list | work in process at fabs and OSATs (gross): node |
 | `wip.k` | (128,) | int64 | padded list | output commodity |
 | `wip.qty` | (128,) | float64 | padded list | quantity |
 | `wip.out_week` | (128,) | int64 | padded list | week it becomes stock |
@@ -30,18 +30,18 @@ Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run 
 | `graph_now.tau` | (25,) | int64 | edges | lead time in weeks per edge |
 | `graph_now.prohibited` | (25, 4) | int8 | edges x commodities | 1 where (edge, k) is prohibited (sanctions, export controls) |
 | `graph_now.tariff` | (25, 4) | float64 | edges x commodities | tariff rate on (edge, k) |
-| `graph_now.open` | (1,) | float64 | layout.chokepoints | open fraction o_c of each chokepoint (1 open, 0 closed) |
-| `graph_now.kappa.tb` | (1,) | float64 | layout.chokepoints | throughput kappa_cb of the tanker/bulk pool, (9) |
-| `graph_now.kappa.ct` | (1,) | float64 | layout.chokepoints | throughput kappa_cb of the container pool, (9) |
+| `graph_now.open` | (1,) | float64 | layout.chokepoints | open fraction o_c of each chokepoint (a strait, canal or the Cape route; 1 open, 0 closed) |
+| `graph_now.kappa.tb` | (1,) | float64 | layout.chokepoints | throughput kappa_cb of the tanker/bulk pool |
+| `graph_now.kappa.ct` | (1,) | float64 | layout.chokepoints | throughput kappa_cb of the container pool |
 | `graph_now.war_risk` | (1,) | int64 | layout.chokepoints | war-risk class code: 0 none, 1 red_sea, 2 hormuz_2026 |
 | `graph_now.supply.avail` | (4,) | float64 | layout.supply_slots | supply available at each source and material slot |
-| `graph_now.fab.R` | (3,) | float64 | layout.fabs | restoration factor R_f of each fab, (13) |
-| `graph_now.fab.alpha_bar` | (3,) | float64 | layout.fabs | power multiplier alpha-bar_f of each fab, (13) |
+| `graph_now.fab.R` | (3,) | float64 | layout.fabs | restoration factor R_f of each fab |
+| `graph_now.fab.alpha_bar` | (3,) | float64 | layout.fabs | power multiplier alpha-bar_f of each fab |
 | `graph_now.fab.cap_eff` | (3,) | float64 | layout.fabs | effective wafer capacity of each fab |
-| `graph_now.grid.G_bar` | (2,) | float64 | layout.grids | deliverable generation G-bar_g of each grid, (15) |
-| `graph_now.grid.y_bar` | (2,) | float64 | layout.grids | base load y-bar_g of each grid, (17) |
-| `graph_now.osat.R` | (1,) | float64 | layout.osats | restoration factor R^osat of each OSAT, (13) (Q97) |
-| `graph_now.osat.thr_eff` | (1,) | float64 | layout.osats | effective throughput thr R^osat of each OSAT, (19) |
+| `graph_now.grid.G_bar` | (2,) | float64 | layout.grids | deliverable generation G-bar_g of each grid |
+| `graph_now.grid.y_bar` | (2,) | float64 | layout.grids | base load y-bar_g of each grid |
+| `graph_now.osat.R` | (1,) | float64 | layout.osats | restoration factor R^osat of each OSAT |
+| `graph_now.osat.thr_eff` | (1,) | float64 | layout.osats | effective throughput thr R^osat of each OSAT |
 | `slot_mask` | (20,) | int8 | action slots | 1 where an edge of the slot's route (the edge, or every edge of its lane) is prohibited for its commodity this week (the wire's convention; see action_mask) |
 | `last_week.clip.requested` | (20,) | float64 | action slots | flow you requested last week |
 | `last_week.clip.executed` | (20,) | float64 | action slots | flow executed after the capacity clip |
@@ -50,8 +50,8 @@ Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run 
 | `last_week.sinks.served` | (1,) | float64 | layout.demands | last week's demand served |
 | `last_week.sinks.lost` | (1,) | float64 | layout.demands | last week's demand lost |
 | `last_week.shed.qty` | (2,) | float64 | layout.grids | power shed at each grid last week |
-| `demand_forecast.qty` | (1, 8) | float64 | layout.demands x h | demand forecast for weeks t + h, h = 0..7, (48) |
-| `warning.score` | (16,) | float64 | layout.warning_units | early-warning score S^t per region, dyad and chokepoint, (45) |
+| `demand_forecast.qty` | (1, 8) | float64 | layout.demands x h | demand forecast for weeks t + h, h = 0..7 |
+| `warning.score` | (16,) | float64 | layout.warning_units | early-warning score S^t per region, dyad and chokepoint |
 | `messages.msg_id` | (2304,) | int64 | padded list | live announcement threads (announced, not effective, not withdrawn): thread id |
 | `messages.channel` | (2304,) | int64 | padded list | channel code: 0 tariff_formal, 1 tariff_informal, 2 tariff_final, 3 sanction_legal, 4 ties_threat, 5 mid_threat |
 | `messages.kind` | (2304,) | int64 | padded list | message kind code: 0 proposal, 1 final_notice, 2 threat, 3 publication, 4 withdrawal |
@@ -128,7 +128,7 @@ Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run 
 | `cost_components` | 0: freight, 1: war_risk, 2: tariff, 3: holding, 4: queue_holding, 5: shortage, 6: disposal, 7: shed |
 | `release_pairs` | 0: chk/lng |
 
-**Static tables** (`config['static']`): a table is a dict of equal-length lists, one entry per node, edge, lane, commodity, slot or sink, and the indices above point into them.
+**Static tables** (`config['static']`, the episode's public tables): a table is a dict of equal-length lists, one entry per node, edge, lane, commodity, slot or sink, and the indices above point into them.
 
 | field | here | meaning |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ Generated for instance `chokepoint-tiny` (T = 26, regime `standard`) by `uv run 
 | `units` | chip_le: wafer-eq 300 mm, chip_le_raw: wafer-eq 300 mm, cost: USD, lng: GWh fuel, wafer: wafer-eq 300 mm | the unit of each commodity's quantities, and of costs |
 | `regions` | 14 entries | region names: `nodes.region`, `messages.region`, `dyads.*` and the warning's region units index them |
 | `nodes.id` | 12 entries | node name |
-| `nodes.type` | 12 entries | source, terminal, grid, chokepoint, material, fab, osat or sink |
+| `nodes.type` | 12 entries | source, terminal, grid, chokepoint (a strait, canal or the Cape route), material, fab, osat or sink |
 | `nodes.region` | 12 entries | region index |
 | `commodities.id` | 4 entries | commodity name |
 | `commodities.v` | 4 entries | customs value v_k, USD per unit |

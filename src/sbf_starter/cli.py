@@ -1,28 +1,6 @@
-"""The starter kit's command line: score, compare, check, pack, upload and follow a submission.
+"""The ``sbf`` command line (``uv run sbf --help``). Commands print their results; the exit status says pass or fail.
 
-Run from the repository root: ``uv run sbf <command> --help`` (``make evaluate``, ``make check`` ... run the common
-ones). An AGENT is a submission folder (``agent.py`` at its root), a zip, an ``agent.py`` file (``evaluate`` and
-``compare``), or a name: a folder of ``agents/`` (yours), else a shipped agent (``template``, ``random``,
-``heuristic``). Every command defaults to the Tiny network (``--task=small`` for the public board's).
-
-    evaluate AGENT       the local score (0 = naive rule, 1 = clairvoyant plan) on the dev episodes, with an interval
-    compare A B          two agents on the same episodes: the difference and its paired interval
-    check AGENT          the scorer's checks, every file's imports, and a timed run in an isolated process
-                         (--docker: the real container with the scorer's CPU meter)
-    pack FOLDER          the submission zip (repeatable bytes), checked
-    upload ZIP           send a zip to the competition on Codabench with your own account (--dry_run to rehearse)
-    status [ID]          your submissions on Codabench and their scores (--wait to follow one)
-    runs                 the example runs under outputs/ (script, run, task, result)
-    fields               every observation and action field of a network (shape, dtype, meaning), as Markdown
-    version              the installed shockbench-flow against the wheel this repository vendors
-
-``evaluate`` and ``compare`` share ``--episodes`` (dev, a count, or a list), ``--quick`` (seconds: a rough naive rule
-and no harm levels, not the leaderboard's numbers; the examples' ``quick=true`` means the same), ``--entropy`` (a root
-of your own) and ``--cpu_budget`` (weeks over the task's CPU budget go to the naive rule, as on the server).
-
-Codabench credentials are read from the environment only (CODABENCH_TOKEN, or CODABENCH_USERNAME and
-CODABENCH_PASSWORD; ``main`` also reads a ``.env`` file, see .env.example) and never printed or stored; the competition
-is --competition or CODABENCH_COMPETITION (its id or URL). See sbf_starter/codabench.py.
+An AGENT is a name (``mine`` means ``agents/mine/``), a submission folder, a zip, or (evaluate, compare) an agent.py.
 """
 
 from __future__ import annotations
@@ -34,27 +12,31 @@ from pathlib import Path
 
 import fire
 
-from helper.display import DisplayConsole
 from sbf_starter import DEFAULT_TASK, check_task, cpu_budget_s
 from sbf_starter.agents import resolve
 
 
 REFUSED, FAILED = 2, 1
-OUT_DIR = Path("outputs")  # where ``pack`` writes a zip by default (gitignored)
-_console = DisplayConsole()
+OUT_DIR = Path("outputs")
 
 
 def _say(*parts) -> None:
-    """One line on stdout, as it is: no markup, no highlighting, no wrapping (the lines hold paths and brackets)."""
-    _console.print(*parts, markup=False, highlight=False, emoji=False, soft_wrap=True)
+    print(*parts, flush=True)
 
 
 def _indent(text: str) -> str:
     return "  " + text.strip().replace("\n", "\n  ")
 
 
+def _shown(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _path(path: str) -> Path:
-    """A folder or zip as given, or a named agent's folder; a missing path is reported as the scorer would."""
+    """A named agent's folder, else the path as given (a missing one is then reported as the scorer would)."""
     try:
         return resolve(path)
     except FileNotFoundError:
@@ -62,7 +44,6 @@ def _path(path: str) -> Path:
 
 
 def _as_zip(path: Path, work: Path) -> Path:
-    """``path`` itself when it is a zip; a folder zipped into ``work`` as the kit zips it."""
     from shockbench_flow_agent.submission import build_submission
 
     if path.is_dir():
@@ -73,7 +54,7 @@ def _as_zip(path: Path, work: Path) -> Path:
 
 
 def _validate(zip_path: Path):
-    """The trusted runner's check of the zip; prints the verdict; returns the Submission or None when refused."""
+    """The scorer's own zip check; prints the verdict; None when refused."""
     from shockbench_flow_agent.submission import REFUSAL_FIXES, SubmissionError, check_zip
 
     try:
@@ -92,7 +73,7 @@ def _validate(zip_path: Path):
 
 
 def _static(root: Path) -> tuple[list[str], list[str]]:
-    """(warnings, the fatal ones): agent.py's mistakes, and every file's imports the scoring image lacks."""
+    """(warnings, fatal ones). Only an import agent.py itself lacks is fatal: naive then plays every week."""
     from shockbench_flow_agent.submission import agent_warnings
 
     from sbf_starter.check import import_warnings
@@ -114,18 +95,14 @@ def check(
     """Check a submission as the scorer does, then time it in a process holding only the server's packages.
 
     Args:
-        path: a folder with agent.py at its root, a submission zip, or an agent's name.
-        task: the network of the timed run: tiny (the default), small (the public board's) or full (the private's).
+        path: an agent's name, a submission folder or a zip.
+        task: tiny, small (the public board's) or full (the private board's).
         episodes: dev episodes of the timed run.
-        timing: play the agent in an isolated process (only the submission and the scoring image's packages on its
-            path) and time Agent(config) and each act in CPU seconds (False: the static checks only).
-        docker: also build the scoring container locally (Docker needed; the first build downloads about 200 MB) and
-            play dev episodes in it with the scorer's CPU meter: the imports, the read-only file system and the
-            time rules are the server's.
-        docker_episodes: episodes of the container run (on small, or full with --task=full).
+        timing: run the timed episodes (False: the static checks only).
+        docker: also play in a local copy of the scoring container, with its CPU meter (needs Docker).
+        docker_episodes: episodes of the container run.
 
-    Exit status: 0 when every check passes, 2 when the scorer would refuse the zip, 1 when the agent would not run
-    there (an import the scoring image lacks, an exception, a malformed action, a week over the wall clock).
+    Exit status: 0 all passed, 2 the scorer would refuse the zip, 1 the agent would not run there.
 
     """
     from shockbench_flow_agent.submission import extract_submission
@@ -150,17 +127,17 @@ def check(
                 f"2. a timed run in an isolated process (only the submission and the scoring image's packages): "
                 f"{episodes} dev episode(s) of {task}, CPU seconds per week (budget {budget:g} s)"
             )
-            missing = checks.missing_here()
-            if missing:
-                _say(f"  NOTE: not installed here, so not importable in this run: {missing} (uv sync --extra rl)")
-            for r in checks.timed_run(root, task, episodes):
+            rows = checks.timed_run(root, task, episodes)
+            if rows and rows[0]["missing"]:
+                _say(f"  NOTE: not installed here, so not importable in this run: {rows[0]['missing']} (--extra rl)")
+            for r in rows:
                 if not r["imported"]:
                     _say("FAILED: agent.py does not import with the scoring image's packages: on the server naive")
                     _say("  plays every week and the score is 0. The agent's error:")
                     _say(_indent(checks.last_error(r["stderr"])))
                     ok = False
                     break
-                s = checks.summary(r, budget)
+                s = checks.summary(r)
                 over = f", over the budget in weeks {s['over']}" if s["over"] else ""
                 _say(
                     f"  episode {r['episode']}: week 1 (Agent(config) + first act) {s['week1_s']:.3f} s, median act "
@@ -183,28 +160,29 @@ def check(
             _say(f"3. the scoring container, {docker_episodes} dev episode(s) of {container.docker_task(task)}")
             rows = container.play(root, container.docker_task(task), docker_episodes, echo=lambda s: _say("  " + s))
             for r in rows:
-                subs = r["substitutions"]
+                subs, s = r["substitutions"], checks.summary(r)
                 _say(
                     f"  episode {r['episode']} ({r['task']}, {r['weeks']} weeks): ready in {r['ready_s'] or 0:.1f} s, "
-                    f"week 1 {r['week1_cpu_s'] or 0:.3f} s CPU, median {r['median_cpu_s'] or 0:.3f} s, max "
-                    f"{r['max_cpu_s'] or 0:.3f} s (budget {r['cpu_budget_s']:g} s); {len(subs)} week(s) the scorer "
-                    "would give to naive" + (f": {subs[:10]}" if subs else "")
+                    f"week 1 {s['week1_s']:.3f} s CPU, median {s['median_s']:.3f} s, max {s['max_s']:.3f} s "
+                    f"(budget {r['cpu_budget_s']:g} s); {len(subs)} week(s) the scorer would give to naive"
+                    + (f": {subs[:10]}" if subs else "")
                 )
                 if r["meter_errors"]:
                     _say(f"  NOTE: the CPU meter could not read the container: {r['meter_errors'][:2]}")
                 ok = ok and not subs
-        _say("all checks passed" if ok else "a check failed: see above")
         if not ok:
+            _say("a check failed: see above")
             sys.exit(FAILED)
+        _say(f"all checks passed; next: uv run sbf upload {path}")
 
 
 def pack(folder: str, out: str | None = None, compress: bool = False) -> str:
-    """Zip a submission folder (agent.py at its root, and any files it loads) with repeatable bytes, then check it.
+    """Zip a submission folder with repeatable bytes, then check the zip.
 
     Args:
-        folder: the submission folder, or an agent's name (agents/<name>, or a shipped one).
-        out: the zip to write (default: outputs/<folder's name>.zip).
-        compress: deflate the members (for large weights; the default stores them).
+        folder: an agent's name or a submission folder.
+        out: the zip to write (default: outputs/<name>.zip).
+        compress: deflate the files (for large weights).
 
     """
     from shockbench_flow_agent.submission import build_submission
@@ -218,22 +196,16 @@ def pack(folder: str, out: str | None = None, compress: bool = False) -> str:
     _say(f"written {dest}")
     if _validate(dest) is None:
         sys.exit(REFUSED)
-    try:
-        shown = dest.resolve().relative_to(Path.cwd())
-    except ValueError:
-        shown = dest
-    _say(f"next: uv run sbf check {shown}   then   uv run sbf upload {shown}")
+    _say(f"next: uv run sbf upload {_shown(dest)} (or upload it on the competition page)")
     return str(dest)
 
 
-def _scored(result, quick: bool, out: str | None) -> None:
+def _scored(result, out: str | None) -> None:
     import json
 
-    from sbf_starter.scoring import QUICK_NOTE, as_dict
+    from sbf_starter.scoring import as_dict
 
-    _say(str(result))
-    if quick:
-        _say(QUICK_NOTE)
+    _say(str(result))  # a quick result's report says so itself
     if out:
         Path(out).write_text(json.dumps(as_dict(result), indent=1) + "\n")
         _say(f"written {out}")
@@ -249,27 +221,25 @@ def evaluate(
     n_jobs: int = -1,
     out: str | None = None,
 ) -> None:
-    """The local score of an agent on the dev episodes (0 = naive rule, 1 = clairvoyant plan), with a 90 % interval.
+    """The local score (0 = naive rule, 1 = clairvoyant plan) with a 90 % interval.
+
+    The first run on a network computes the references and caches them: a minute or two on tiny, longer on small and
+    full.
 
     Args:
-        path: an agent's name, a submission folder or zip (checked by the scorer's validator first), or an agent.py
-            file (played in this process, where a debugger works).
-        task: tiny (the default), small (the public board's network) or full (the private board's).
-        episodes: dev (20 public episodes, 5 per harm level), a count k (episodes 0..k-1) or a list.
-        quick: seconds instead of minutes: a rough naive rule, no harm levels, the first 4 episodes for dev; not the
-            leaderboard's numbers.
-        entropy: 0, the public dev episodes; any other integer, a root of your own (tune there, confirm on dev).
-        cpu_budget: hand a week over the task's CPU budget to the naive rule, as the server does (this machine's CPU).
+        path: an agent's name, a submission folder or zip, or an agent.py (played in this process: a debugger works).
+        task: tiny, small (the public board's) or full (the private board's).
+        episodes: dev (20 episodes, 5 per harm level), a count k (episodes 0..k-1) or a list.
+        quick: seconds, not the leaderboard's numbers (a rough naive rule, no harm levels, 4 episodes).
+        entropy: 0 for the public dev episodes; any other integer for scenarios of your own.
+        cpu_budget: a week over the task's CPU budget is played by the naive rule, as on the server.
         n_jobs: workers of a first run's reference computation (-1: all cores).
-        out: write the result as JSON there.
-
-    The first run on a network computes the naive rule's and the clairvoyant plan's costs and caches them
-    (``~/.cache/shockbench-flow`` or ``SBF_CACHE_DIR``): a minute or two on tiny, longer on small and full.
+        out: also write the result as JSON there.
 
     """
     from sbf_starter.scoring import evaluate as score
 
-    _scored(score(path, task, episodes, quick=quick, entropy=entropy, cpu_budget=cpu_budget, n_jobs=n_jobs), quick, out)
+    _scored(score(path, task, episodes, quick=quick, entropy=entropy, cpu_budget=cpu_budget, n_jobs=n_jobs), out)
 
 
 def compare(
@@ -283,88 +253,109 @@ def compare(
     n_jobs: int = -1,
     out: str | None = None,
 ) -> None:
-    """Two agents on the same episodes: A's score minus B's, with a paired 90 % interval (the arguments of evaluate).
+    """A's score minus B's on the same episodes, with a paired 90 % interval (the other arguments are evaluate's).
 
-    A paired interval resamples both agents on the same episodes, so the noise they share cancels: when it holds 0,
-    these episodes cannot tell the two apart.
+    When the interval holds 0, these episodes cannot tell the two apart.
     """
     from sbf_starter.scoring import compare as cmp
 
     result = cmp(a, b, task, episodes, quick=quick, entropy=entropy, cpu_budget=cpu_budget, n_jobs=n_jobs)
-    _scored(result, quick, out)
+    _scored(result, out)
 
 
-def _client(competition: str | int | None = None):
-    """The client of the Codabench server that hosts the competition.
+def token(competition: str | None = None) -> None:
+    """Get your Codabench API token from your username and password, and save it as CODABENCH_TOKEN in .env.
 
-    The server is a competition URL's own host, else ``CODABENCH_URL``, else www.codabench.org. Credentials go only to
-    that host.
+    Codabench's pages do not show the token. The password is not echoed, printed or stored. An account made with
+    "Sign in with GitHub" needs a password first (Codabench's password reset).
+
+    Args:
+        competition: the competition's URL, which names the server (default: CODABENCH_COMPETITION).
+
     """
-    import urllib.parse
+    import getpass
 
-    from sbf_starter import codabench
+    from dotenv import find_dotenv, set_key
 
-    value = str(competition or os.environ.get("CODABENCH_COMPETITION") or "").strip()
-    parsed = urllib.parse.urlparse(value)
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme in ("http", "https") and parsed.netloc else None
-    configured = (os.environ.get("CODABENCH_URL") or "").rstrip("/") or None
-    if origin and configured and origin != configured:
-        raise SystemExit(f"the competition URL is on {origin} but CODABENCH_URL is {configured}: unset one of them")
-    creds = codabench.Credentials.from_env()
-    return codabench.Client(origin or configured or codabench.DEFAULT_URL, creds)
+    from sbf_starter import ROOT, codabench
 
-
-def _competition(competition: str | int | None):
-    from sbf_starter import codabench
-
-    value = competition or os.environ.get("CODABENCH_COMPETITION")
-    if not value:
-        raise SystemExit("name the competition: --competition=<id or URL>, or CODABENCH_COMPETITION in the environment")
-    return codabench.competition_id(value)
+    base = codabench.server_url(competition or os.environ.get("CODABENCH_COMPETITION"))
+    _say(f"your account on {base} (the password is not shown, not printed and not stored)")
+    username = input("username or email: ").strip()
+    password = getpass.getpass("password: ")
+    try:
+        value = codabench.get_token(base, username, password)
+    except codabench.CodabenchError as err:
+        _say(f"ERROR: {err}")
+        sys.exit(FAILED)
+    path = Path(find_dotenv(usecwd=True) or ROOT / ".env")
+    if not path.exists():
+        example = ROOT / ".env.example"
+        path.write_text(example.read_text() if example.is_file() else "")
+        path.chmod(0o600)
+    set_key(path, "CODABENCH_TOKEN", value, quote_mode="auto")
+    _say(f"CODABENCH_TOKEN saved in {_shown(path)} (gitignored)")
+    if not (competition or os.environ.get("CODABENCH_COMPETITION")):
+        _say(f"next: set CODABENCH_COMPETITION in {_shown(path)} to the competition's URL")
+    _say("next: uv run sbf upload <agent> --dry_run")
 
 
 def upload(
-    zip_path: str,
+    agent: str,
     competition: str | None = None,
     phase: str | None = None,
     dry_run: bool = False,
     wait: bool = False,
     poll_s: float = 30.0,
 ) -> None:
-    """Upload a submission zip to the competition with your Codabench account (the web page's upload, scripted).
+    """Pack an agent and submit it to the competition. Each upload spends one of 3 daily submissions.
+
+    Only the scorer's static checks run here: run ``sbf check`` first.
 
     Args:
-        zip_path: the zip (``pack`` writes one; a folder is refused: pack it first).
-        competition: the competition's id or URL (default CODABENCH_COMPETITION).
-        phase: the phase's name on Codabench (default: the one open now).
-        dry_run: check everything (the zip, your login, registration, the phase, your daily slots) and upload nothing.
-        wait: follow the submission until it is scored, then print its score.
+        agent: an agent's name, a submission folder (packed to outputs/<name>.zip) or a zip.
+        competition: the competition's URL (default: CODABENCH_COMPETITION).
+        phase: the phase's name (default: the one open now).
+        dry_run: check the zip, token, registration, phase and daily slots; upload nothing.
+        wait: wait for the score and print it.
         poll_s: seconds between two status reads while waiting (at least 10).
 
-    Each upload spends one of the phase's daily submissions (3 per UTC day); nothing is ever retried.
-
     """
+    from shockbench_flow_agent.submission import build_submission, extract_submission
+
     from sbf_starter import codabench
 
-    path = Path(zip_path)
-    if not path.is_file() or path.suffix != ".zip":
-        raise SystemExit(f"{path}: not a zip file (pack a folder first: uv run sbf pack <folder>)")
-    _say(f"1. the scorer's checks of {path.name}")
-    if _validate(path) is None:
+    path = _path(agent)
+    if path.is_dir():
+        zip_path = OUT_DIR / f"{path.resolve().name}.zip"
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        build_submission(path, zip_path)
+    elif path.is_file() and path.suffix == ".zip":
+        zip_path = path
+    else:
+        raise SystemExit(f"{path}: not an agent's name, a submission folder or a zip")
+    _say(f"1. the scorer's checks of {_shown(zip_path)}")
+    if _validate(zip_path) is None:
         sys.exit(REFUSED)
-    pk, secret = _competition(competition)
-    client = _client(competition)
+    with tempfile.TemporaryDirectory(prefix="sbf-upload-") as tmp:
+        _warnings, fatal = _static(extract_submission(zip_path, Path(tmp)).root)
+    if fatal:
+        for w in fatal:
+            _say(f"FAILED: {w}")
+        _say(f"  nothing uploaded; see uv run sbf check {agent}")
+        sys.exit(FAILED)
     try:
-        _say(f"2. Codabench at {client.base_url}, competition {pk}, credentials from {client.credentials.describe()}")
+        client, pk, secret = codabench.from_env(competition)
+        _say(f"2. Codabench at {client.base_url}, competition {pk}")
         comp, ph = codabench.preflight(client, pk, secret, phase)
         used = ph.get("used_submissions_per_day")
         limit = ph.get("max_submissions_per_day")
-        _say(f"  phase {ph.get('name')!r} (id {ph['id']}) is open; submissions today: {used} of {limit}")
+        _say(f"  phase {ph.get('name')!r} (id {ph['id']}, {ph.get('status')}); submissions today: {used} of {limit}")
         if dry_run:
             _say("dry run: nothing uploaded")
             return
         _say("3. uploading")
-        sub = codabench.upload(client, path, comp, ph)
+        sub = codabench.upload(client, zip_path, comp, ph)
         _say(f"  submission {sub.get('id')} created, status {sub.get('status')}")
         if wait:
             done = codabench.wait(client, sub["id"], poll_s, echo=lambda s: _say("  " + s))
@@ -394,25 +385,24 @@ def status(
     wait: bool = False,
     poll_s: float = 30.0,
 ) -> None:
-    """One submission's status and score, or (no id) your submissions to the phase.
+    """One submission's status and score, or all of yours in the phase.
 
     Args:
-        submission: a submission id (``upload`` prints it).
-        competition: the competition's id or URL (default CODABENCH_COMPETITION), for the list.
-        phase: the phase's name (default: the one open now), for the list.
+        submission: a submission id (upload prints it).
+        competition: the competition's URL (default: CODABENCH_COMPETITION).
+        phase: the phase's name, for the list (default: the one open now).
         wait: follow the submission until it is Finished, Failed or Cancelled.
         poll_s: seconds between two reads while waiting (at least 10).
 
     """
     from sbf_starter import codabench
 
-    client = _client(competition)
     try:
+        client, pk, secret = codabench.from_env(competition)
         if submission is not None:
             sub = codabench.wait(client, int(submission), poll_s) if wait else client.submission(int(submission))
             _print_submission(sub)
             return
-        pk, secret = _competition(competition)
         ph = codabench.pick_phase(client.competition(pk, secret), phase)
         subs = client.submissions(ph["id"])
         _say(f"phase {ph.get('name')!r}: {len(subs)} submission(s)")
@@ -423,119 +413,19 @@ def status(
         sys.exit(FAILED)
 
 
-def runs(limit: int = 20) -> None:
-    """The runs of the examples (and of your scripts) under outputs/, newest first: script, run, task, results."""
-    import pandas as pd
-
-    from sbf_starter import runs as run_folders
-
-    rows = run_folders.table()[:limit]
-    if not rows:
-        _say("no runs under outputs/ yet: every example writes outputs/<script>/<run_name>/")
-        return
-
-    def shown(results: dict) -> str:
-        return ", ".join(f"{k} {v:.4f}" if isinstance(v, float) else f"{k} {v}" for k, v in results.items())
-
-    table = pd.DataFrame(
-        {
-            "script": [r.get("script") for r in rows],
-            "run": [r.get("run_name") for r in rows],
-            "task": [r.get("task") or "-" for r in rows],
-            "wheel": [r.get("shockbench_flow") for r in rows],
-            "commit": [(r.get("git_commit") or "-")[:8] + ("+" if r.get("git_dirty") else "") for r in rows],
-            "results": [shown(r.get("results") or {}) or "-" for r in rows],
-        }
-    )
-    _console.display_df_as_table(table, max_rows=len(rows), max_col_width=None, title="runs under outputs/")
-
-
-def fields(task: str = DEFAULT_TASK, out: str | None = None) -> None:
-    """Every observation and action field of a network, with its shape, dtype, index set and meaning (Markdown).
-
-    Args:
-        task: tiny, small or full.
-        out: write the tables to this file instead of printing them.
-
-    """
-    import re
-
-    import gymnasium as gym
-    import shockbench_flow_gym  # noqa: F401 - registers the ShockBench/* ids
-    from shockbench_flow_agent.spaces import markdown
-
-    from sbf_starter import env_id
-    from sbf_starter.play import make_agent
-
-    env = gym.make(env_id(task))
-    obs, info = env.reset(options={"episode": 0})
-    config = make_agent(env, lambda c: c, obs, info)
-    text = markdown(config, obs, grouped="lot_keys" in config["layout"])
-    generator = "by `uv run python scripts/python/build_starter_kit.py`"
-    text = text.replace(generator, f"by `uv run sbf fields --task={task}`")
-    text = re.sub(r" \(design \u00a7[\d.]+\)|,? design \u00a7[\d.]+", "", text)  # the benchmark's design sections
-    if out:
-        Path(out).write_text(text + "\n")
-        _say(f"written {out}")
-    else:
-        _say(text)
-
-
-def version() -> None:
-    """The installed shockbench-flow against the vendored wheel and uv.lock; exit 1 when they disagree."""
-    import hashlib
-    import importlib.metadata
-    import re
-    import tomllib
-    import zipfile
-
-    from sbf_starter import ROOT
-    from sbf_starter.container import vendored_wheel
-
-    wheel = vendored_wheel()
-    with zipfile.ZipFile(wheel) as zf:
-        meta = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
-        vendored = re.search(r"^Version: (.+)$", zf.read(meta).decode(), re.MULTILINE).group(1).strip()
-    try:
-        installed = importlib.metadata.version("shockbench-flow")
-    except importlib.metadata.PackageNotFoundError:
-        installed = None
-    lock = tomllib.loads((ROOT / "uv.lock").read_text())
-    entry = next((p for p in lock.get("package", []) if p.get("name") == "shockbench-flow"), {})
-    locked = entry.get("version")
-    digest = f"sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}"
-    # a wheel of the vendor/ index is locked by its file name (a path source, by its hash)
-    names = {Path(str(w.get("path") or w.get("url") or "")).name for w in entry.get("wheels", [])}
-    same = wheel.name in names or digest in {w.get("hash") for w in entry.get("wheels", [])}
-    _say(f"vendored wheel: {wheel.name} (version {vendored})")
-    _say(f"locked in uv.lock: {locked}; installed: {installed}")
-    problems = []
-    if locked != vendored or not same:
-        problems.append("uv.lock does not match the vendored wheel: run `make update` (or `uv lock` then `uv sync`)")
-    if installed != vendored:
-        problems.append("the installed version is not the vendored wheel's: run `make update` (it keeps the rl extra)")
-    for p in problems:
-        _say(f"PROBLEM: {p}")
-    if problems:
-        sys.exit(FAILED)
-    _say("ok: up to date with this repository (new wheels are announced in CHANGELOG.md)")
-
-
 COMMANDS = {
     "evaluate": evaluate,
     "compare": compare,
     "check": check,
     "pack": pack,
+    "token": token,
     "upload": upload,
     "status": status,
-    "runs": runs,
-    "fields": fields,
-    "version": version,
 }
 
 
 def main() -> None:
-    """The ``sbf`` console script: a ``.env`` in the working directory (or above) is read first, then Fire."""
+    """The ``sbf`` console script: reads ``.env`` (from the working directory up), then runs Fire."""
     from dotenv import find_dotenv, load_dotenv
 
     load_dotenv(find_dotenv(usecwd=True), override=True)

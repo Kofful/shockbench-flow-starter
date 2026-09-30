@@ -6,20 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name:
-          Install (the vendored wheel, the gym and rl extras, the test tools)
+      - name: Install (shockbench-flow, the rl extra, the test tools)
         run: uv sync --locked --all-extras
-      - name: Wheel and lock agree
-        run: uv run sbf version
-      - name:
-          Tests (entry points on Tiny, the CLI, upload against a local mock of
-          Codabench)
+      - name: Tests (the examples on Tiny, the CLI, upload against a local mock of Codabench)
         run: uv run pytest -n 3

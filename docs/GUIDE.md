@@ -79,7 +79,7 @@ class Agent:
 Every field, with its shape, dtype, index set and meaning, is in
 [fields/tiny.md](fields/tiny.md), [fields/small.md](fields/small.md) and
 [fields/full.md](fields/full.md), generated from the installed package by
-`uv run sbf fields --task=<name>`. The fields that matter most at first:
+`uv run python scripts/fields_docs.py`. The fields that matter most at first:
 
 | key                                           | what it is                                                                                                  |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -184,7 +184,7 @@ env = RescaleAction(env, -1.0, 1.0)                         # what Stable-Baseli
 
 Most of the observation's size is the padded lists: dropping them (as above)
 leaves 850 numbers on Tiny, 5,684 on Small and 17,803 on Full (masks included).
-[05_train_ppo.py](../scripts/python/05_train_ppo.py) trains PPO on this stack
+[05_train_ppo.py](../examples/05_train_ppo.py) trains PPO on this stack
 and exports the policy as TorchScript (`torch.jit.load` in `agent.py`), since
 the server has torch but not Stable-Baselines3.
 
@@ -264,11 +264,11 @@ clairvoyant plan is not solved exactly is left out, and the report says so.
 
 ## Local evaluation and its noise
 
-`uv run sbf evaluate <agent>` (or `04_evaluate.py`, the same function) scores
+`uv run sbf evaluate <agent>` (or `examples/04_evaluate.py`, the same function) scores
 your agent on the public dev episodes of Tiny by default, with the scorer's own
 computation: `--task=small` for the public board's network, `--task=full` for
 the private board's. The dev split is 20 episodes, 5 per harm level. It builds
-the wheel's `EpisodeSet`, which computes the naive rule's and the clairvoyant
+shockbench-flow's `EpisodeSet`, which computes the naive rule's and the clairvoyant
 plan's costs of the episodes once and caches them on disk
 (`~/.cache/shockbench-flow` or `SBF_CACHE_DIR`); afterwards a score costs one
 run of your agent per episode. In Python:
@@ -288,18 +288,18 @@ print(episodes.compare("agents/mine", "agents/other"))
   and on Full, and a clairvoyant plan takes seconds per episode on Small and
   more than a minute per episode on Full. Small is the practical local target.
 - **`--quick`** (a rough naive rule, no harm levels, the first 4 episodes) runs
-  in seconds; its numbers are not the board's. The examples' `quick=true` means
+  in seconds; its numbers are not the board's. The examples' `--quick` means
   the same.
 - **The dev split is small.** One standard error of a score over the choice of
-  20 episodes is 0.17 to 0.20 (the organisers' random and order-up-to samples on
-  Tiny). `evaluate` prints a 90 % interval; to tell whether a change helped, use
+  20 episodes is about 0.17 to 0.20. `evaluate` prints a 90 % interval; to tell
+  whether a change helped, use
   **`sbf compare new old`**: both agents play the same episodes and the interval
   of the difference is paired, so the noise they share cancels. When it holds 0,
   the episodes cannot tell them apart.
 - **Tune on your own root.**
   `uv run sbf evaluate mine --entropy=12345 --episodes=64` scores 64 episodes of
   a root of your own (their references cached too), and
-  [06_policy_search.py](../scripts/python/06_policy_search.py) trains on one.
+  [06_policy_search.py](../examples/06_policy_search.py) trains on one.
   Keep the dev episodes for confirmation.
 - **Same machine, same numbers.** Costs are reproducible to the cent on one
   machine type, not across CPU types, so your local score can differ from the
@@ -322,50 +322,52 @@ naive rule played for your agent (with the first error, when there was one).
    missing import. Add `--docker` to run in a local copy of the scoring
    container (needs Docker; the first build downloads the pinned torch and SciPy
    wheels).
-2. `uv run sbf pack <agent>`: the zip (`outputs/<name>.zip`), with `agent.py` at
-   its root.
-3. Upload it on the competition page, or `uv run sbf upload <zip>`:
-   - credentials come from the environment only: `CODABENCH_TOKEN`, or
-     `CODABENCH_USERNAME` (or your email) and `CODABENCH_PASSWORD`. Codabench's
-     pages do not show your API token, so the username and password are the
-     usual way; an account created with "Sign in with GitHub" needs a password
-     first (Codabench's password reset). Keep them out of git: in your shell, or
-     in a `.env` (see `.env.example`; `sbf` reads it, and `.gitignore` lists
-     it);
-   - `--competition=<the competition's URL>` or `CODABENCH_COMPETITION` (the
-     helper talks to that URL's host only); `--phase` names a phase (default:
-     the one open now); `--dry_run` checks the zip, your login, your
-     registration, the phase and your remaining daily submissions, and uploads
-     nothing; `--wait` follows the run and prints the score;
-   - it stops, without retrying, on anything Codabench refuses (registration
-     pending, phase closed, daily limit); a Failed run does not count against
-     Codabench's limits.
-4. `uv run sbf status` lists your submissions and scores.
+2. `uv run sbf upload <agent>` packs the agent into `outputs/<name>.zip`, runs
+   the server's static checks and submits it. It reads two variables from the
+   environment or from a `.env` file (copy `.env.example`; `.gitignore` lists
+   `.env`):
+   - `CODABENCH_COMPETITION`: the competition's URL. The tool talks to that
+     URL's host only.
+   - `CODABENCH_TOKEN`: your Codabench API token, never printed. Codabench's
+     pages do not show it: `uv run sbf token` asks once for your username (or
+     email) and password (not echoed, not stored) and saves the token in
+     `.env`. An account created with "Sign in with GitHub" needs a password
+     first (Codabench's password reset).
 
-The helper uses Codabench's own web API with your account, in the order the web
+   `--dry_run` checks the zip, your token, your registration, the phase and your
+   remaining daily submissions, and uploads nothing. `--wait` follows the run
+   and prints the score. `--phase` names a phase (default: the one open now).
+   It stops, without retrying, on anything Codabench refuses (registration
+   pending, phase closed, daily limit); a Failed run does not count against
+   Codabench's limits.
+3. `uv run sbf status` lists your submissions and scores.
+
+The upload uses Codabench's own web API with your account, in the order the web
 page uses it, one request at a time; it is not a documented interface and may
-change with Codabench.
+change with Codabench. The web page always works: `uv run sbf pack <agent>`
+writes the zip (`outputs/<name>.zip`, with `agent.py` at its root) to upload
+there.
 
 ## Approaches
 
 - **Heuristics and control.** Start from send-the-maximum and add rules that
   read the observation: strait closures (`graph_now.open`), sanctions
   (`action_mask`, `pending_prohibitions.*`), warnings, stock against demand.
-  Measure each rule; on Small the kit's order-up-to sample scored far below
-  naive (README, "Reference scores").
+  Measure each rule with `sbf compare`: a plausible rule can score below naive.
 - **Planning (MPC).** The package's `mpc_det` baseline solves the clairvoyant
   plan's linear program over the next weeks on a forecast in which observed
-  disruptions persist (0.899 on Tiny, 0.7050 on Small). SciPy's `linprog`
-  (HiGHS) is on the server; mind the 2 s and 4 s CPU budgets.
+  disruptions persist. SciPy's `linprog` (HiGHS) is on the server; mind the 2 s
+  and 4 s CPU budgets.
 - **Reinforcement learning.**
-  [05_train_ppo.py](../scripts/python/05_train_ppo.py): the wrappers above, PPO,
+  [05_train_ppo.py](../examples/05_train_ppo.py): the wrappers above, PPO,
   and an export the server can run. Train on your own root (`ScenarioPool`),
   watch the CPU cost of your network per week.
 - **Evolutionary and program search (AlphaEvolve style).**
-  [06_policy_search.py](../scripts/python/06_policy_search.py): candidates are
-  `agent.py` sources, the fitness is the score on cached references of your own
+  [06_policy_search.py](../examples/06_policy_search.py): candidates are
+  submission folders (here the heuristic agent with its numbers in a
+  `params.json`), the fitness is the score on cached references of your own
   root under the CPU budget, and the proposer is a mutation you can replace with
-  a model that edits code. Fitness on a few episodes is noisy: the example keeps
+  a model that writes `agent.py`. Fitness on a few episodes is noisy: the example keeps
   its best only if it beats the starting point on the held-out dev split
   (`EpisodeSet.compare`, a paired interval).
 

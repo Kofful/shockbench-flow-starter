@@ -1,11 +1,6 @@
-"""A local stand-in for Codabench's API (v1.33's behaviour on the endpoints the upload helper uses), for the tests.
+"""A local stand-in for the Codabench v1.33 endpoints the client uses, refusing what the real server refuses.
 
-It follows Codabench's own code where it matters to the client: token authentication (``Authorization: Token <key>``,
-401 otherwise), the password exchange of ``/api/api-token-auth/``, the competition's phases with their status and the
-caller's ``participant_status``, the data object that returns a storage URL, a storage PUT that refuses Codabench
-credentials and any Content-Type but ``application/zip`` (a presigned S3 or GCS URL fails its signature otherwise),
-the submission checks in Codabench's order (approved 403, phase open 400, daily and total limits 400, not counting
-Failed submissions) and a status that walks Submitted, Running, Scoring, Finished with its scores.
+Like a presigned storage URL, its storage PUT refuses Codabench credentials and any Content-Type but application/zip.
 """
 
 from __future__ import annotations
@@ -27,6 +22,9 @@ PHASE_DEV, PHASE_FINAL, TASK_DEV = 71, 72, 81
 @dataclass
 class State:
     approved: str | None = "approved"  # the caller's participant_status
+    organiser: bool = False  # may submit to a phase that is not open
+    member: bool = True  # an organiser or participant, who sees the competition without its secret key
+    flaky_gets: int = 0  # the next GETs of the competition fail with 502, as Codabench's sometimes do
     dev_status: str = "Current"
     max_per_day: int = 3
     fail_next: bool = False  # the next submission ends Failed
@@ -80,6 +78,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _send_html(self, status: int) -> None:
+        raw = b'\n\n<!DOCTYPE html>\n<html lang="en"><body>Server Error (500)</body></html>'
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def _body(self) -> bytes:
         return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
@@ -108,8 +114,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"token": TOKEN})
         m = re.fullmatch(r"/api/competitions/(\d+)/(\?.*)?", path)
         if method == "GET" and m:
-            if int(m.group(1)) != COMPETITION:
-                return self._send(404, {"detail": "Not found."})
+            if st.flaky_gets > 0:
+                st.flaky_gets -= 1
+                return self._send_html(502)
+            with_secret = "secret_key=" in (m.group(2) or "")
+            if int(m.group(1)) != COMPETITION or not (st.member or with_secret):
+                return self._send(404, {"detail": "No Competition matches the given query."})
+            if st.member and with_secret and "Authorization" in self.headers:
+                return self._send_html(500)  # as Codabench once answered a logged-in organiser sending the key
             return self._send(200, competition_doc(st))
         if not self._authed():
             return None
@@ -120,6 +132,8 @@ class Handler(BaseHTTPRequestHandler):
             if self._used_today(int(m.group(1))) >= st.max_per_day:
                 reason = "Reached maximum allowed submissions for today for this phase"
                 return self._send(200, {"can": False, "reason": reason})
+            if st.dev_status != "Current" and not st.organiser:
+                return self._send(200, {"can": False, "reason": "This phase is not currently accepting submissions."})
             return self._send(200, {"can": True, "reason": None})
         if method == "POST" and path == "/api/datasets/":
             return self._dataset(json.loads(body))
@@ -174,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
         phase = data.get("phase")
         if phase not in (PHASE_DEV, PHASE_FINAL):
             return self._send(400, {"phase": ["Invalid pk - object does not exist."]})
-        if phase != PHASE_DEV or st.dev_status != "Current":
+        if phase != PHASE_DEV or (st.dev_status != "Current" and not st.organiser):
             return self._send(400, {"non_field_errors": ["This phase is not currently accepting submissions."]})
         if self._used_today(phase) >= st.max_per_day:
             reason = "Reached maximum allowed submissions for today for this phase"
@@ -210,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
         sub["_polls"] += 1
         if sub["status"] == "Finished":
             sub["scores"] = [
-                {"id": 1, "index": 0, "score": "0.4281000000", "column_key": "rss", "precision": 4, "is_primary": True},
+                {"id": 1, "index": 0, "score": "0.5000000000", "column_key": "rss", "precision": 4, "is_primary": True},
                 {"id": 2, "index": 1, "score": "0E-10", "column_key": "fallback_count", "precision": 0},
             ]
         if sub["status"] == "Failed":

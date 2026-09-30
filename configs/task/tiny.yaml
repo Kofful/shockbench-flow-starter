@@ -1,3 +1,0 @@
-# Tiny: the practice network, seconds per episode (12 nodes, 25 edges, 26 weeks, 20 flows slots)
-name: tiny
-env_id: ShockBench/Tiny-v0

@@ -1,12 +1,23 @@
-"""Shared fixtures: a private cache directory, so tests never touch ~/.cache/shockbench-flow, and the repo root."""
+"""Shared fixtures. Every test uses a private reference cache, never ~/.cache/shockbench-flow."""
 
 import os
+import textwrap
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CODABENCH_VARS = ("CODABENCH_TOKEN", "CODABENCH_COMPETITION")
+
+
+def write_agent(folder: Path, source: str, **files: str) -> Path:
+    """A submission folder: ``source`` as agent.py, and ``files`` (name -> text) beside it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "agent.py").write_text(textwrap.dedent(source))
+    for name, text in files.items():
+        (folder / name).write_text(textwrap.dedent(text))
+    return folder
 
 
 def pytest_addoption(parser):
@@ -24,48 +35,23 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def cache_dir(tmp_path_factory) -> Path:
-    """One cache for the whole session (naive's quantiles are computed once per worker at 2 replications)."""
+    """One per session, so each worker computes the references once."""
     return tmp_path_factory.mktemp("sbf-cache")
 
 
 @pytest.fixture(autouse=True)
 def _private_cache(cache_dir, monkeypatch):
     monkeypatch.setenv("SBF_CACHE_DIR", str(cache_dir))
-    for var in (
-        "CODABENCH_TOKEN",
-        "CODABENCH_USERNAME",
-        "CODABENCH_PASSWORD",
-        "CODABENCH_COMPETITION",
-        "CODABENCH_URL",
-    ):
+    for var in CODABENCH_VARS:
         monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture
 def env_with_cache(cache_dir) -> dict:
-    """The environment of an entry point run in a subprocess: the private cache, one BLAS thread, plain logs."""
+    """For an example run in a subprocess: the private cache, one BLAS thread, no Codabench variables."""
     env = dict(os.environ)
-    env.update(
-        {
-            "SBF_CACHE_DIR": str(cache_dir),
-            "OMP_NUM_THREADS": "1",
-            "OPENBLAS_NUM_THREADS": "1",
-            "MPLBACKEND": "Agg",
-            "COLORIZE": "false",
-            "LOG_LEVEL": "INFO",
-        }
-    )
-    for var in ("CODABENCH_TOKEN", "CODABENCH_USERNAME", "CODABENCH_PASSWORD"):
+    env.update({"SBF_CACHE_DIR": str(cache_dir), "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
+    env["MPLBACKEND"] = "Agg"
+    for var in CODABENCH_VARS:
         env.pop(var, None)
     return env
-
-
-@pytest.fixture
-def log_messages():
-    """The messages logged through helper.logging's logger while the test runs (INFO and above)."""
-    from helper.logging import logger
-
-    messages: list[str] = []
-    sink = logger.add(lambda m: messages.append(m.record["message"]), level="INFO")
-    yield messages
-    logger.remove(sink)
