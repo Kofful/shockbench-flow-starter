@@ -219,6 +219,8 @@ def evaluate(
     entropy: int = 0,
     cpu_budget: bool = False,
     n_jobs: int = -1,
+    batch_size: int = 32,
+    device: str = "auto",
     out: str | None = None,
 ) -> None:
     """The local score (0 = naive rule, 1 = clairvoyant plan) with a 90 % interval.
@@ -233,13 +235,28 @@ def evaluate(
         quick: seconds, not the leaderboard's numbers (a rough naive rule, no harm levels, 4 episodes).
         entropy: 0 for the public dev episodes; any other integer for scenarios of your own.
         cpu_budget: a week over the task's CPU budget is played by the naive rule, as on the server.
-        n_jobs: workers of a first run's reference computation (-1: all cores).
+        n_jobs: workers for reference computation and ordinary agent episodes (-1: all cores).
+        batch_size: simultaneous episodes for an Agent class with act_batch (32 by default).
+        device: inference device published as SBF_EVAL_DEVICE: auto, cpu, cuda or cuda:N.
         out: also write the result as JSON there.
 
     """
     from sbf_starter.scoring import evaluate as score
 
-    _scored(score(path, task, episodes, quick=quick, entropy=entropy, cpu_budget=cpu_budget, n_jobs=n_jobs), out)
+    _scored(
+        score(
+            path,
+            task,
+            episodes,
+            quick=quick,
+            entropy=entropy,
+            cpu_budget=cpu_budget,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+            device=device,
+        ),
+        out,
+    )
 
 
 def compare(
@@ -251,6 +268,8 @@ def compare(
     entropy: int = 0,
     cpu_budget: bool = False,
     n_jobs: int = -1,
+    batch_size: int = 32,
+    device: str = "auto",
     out: str | None = None,
 ) -> None:
     """A's score minus B's on the same episodes, with a paired 90 % interval (the other arguments are evaluate's).
@@ -259,7 +278,18 @@ def compare(
     """
     from sbf_starter.scoring import compare as cmp
 
-    result = cmp(a, b, task, episodes, quick=quick, entropy=entropy, cpu_budget=cpu_budget, n_jobs=n_jobs)
+    result = cmp(
+        a,
+        b,
+        task,
+        episodes,
+        quick=quick,
+        entropy=entropy,
+        cpu_budget=cpu_budget,
+        n_jobs=n_jobs,
+        batch_size=batch_size,
+        device=device,
+    )
     _scored(result, out)
 
 

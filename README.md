@@ -91,6 +91,14 @@ sbf evaluate mine                # your score on Tiny's 20 dev episodes, with a 
 sbf compare mine template        # did your change help? a paired interval
 ```
 
+Local evaluation uses all CPU cores by default for independent episodes. Torch
+agents may additionally implement the static method
+`Agent.act_batch(agents, observations)`;
+`sbf evaluate ... --batch_size=32 --device=auto` then batches policy inference
+and uses CUDA when available. Install the CUDA-capable runtime with
+`uv sync --extra cuda`. Reference generation and simulation remain CPU work.
+Use `--device=cpu --batch_size=1` for the closest match to the CPU-only board.
+
 The first run on a network computes the reference costs and caches them: about a minute on Tiny, longer on Small and
 Full. When your agent works on Tiny, add `--task=small`: Small is the network the public board scores.
 

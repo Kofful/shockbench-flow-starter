@@ -81,7 +81,7 @@ def main(
         elite: candidates kept as parents.
         sigma: the mutation's scale.
         quick: seconds, not the leaderboard's numbers.
-        n_jobs: workers of the references' first computation (-1: all cores).
+        n_jobs: workers for reference computation and candidate episodes (-1: all cores).
         seed: the search's generator.
         out: the run folder (default: outputs/06_policy_search/<date_time>).
 
@@ -96,7 +96,7 @@ def main(
         work = Path(tmp)
 
         def fitness(params: np.ndarray, name: str) -> float:
-            score = train.score(str(write_candidate(params, work / name)), cpu_budget=True)
+            score = train.score(str(write_candidate(params, work / name)), cpu_budget=True, n_jobs=n_jobs)
             return -math.inf if score.rss is None else score.rss
 
         start = start_params(gym.make(env_id(task)).action_space["flows"].shape[0])
@@ -113,7 +113,9 @@ def main(
         best_score, best = max(archive, key=lambda x: x[0])
         print(f"the best candidate: training {scoring.SCALE} {best_score:.4f}, closure_power {best[-1]:.3f}")
         best_dir = write_candidate(best, work / "best")
-        cmp = held_out.compare(str(best_dir), str(write_candidate(start, work / "start")), cpu_budget=True)
+        cmp = held_out.compare(
+            str(best_dir), str(write_candidate(start, work / "start")), cpu_budget=True, n_jobs=n_jobs
+        )
         cmp = replace(cmp, a=replace(cmp.a, agent="the best candidate"), b=replace(cmp.b, agent="send-the-maximum"))
         print(f"held out, on {len(held_out.episodes)} dev episodes:\n{cmp}")
         if cmp.diff is not None and cmp.diff > 0:

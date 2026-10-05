@@ -891,6 +891,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cuda = [
+    { name = "torch" },
+]
 rl = [
     { name = "shockbench-flow", extra = ["rl"] },
 ]
@@ -908,8 +911,9 @@ requires-dist = [
     { name = "python-dotenv", specifier = "~=1.2.2" },
     { name = "shockbench-flow", extras = ["gym"], specifier = ">=0.1.2" },
     { name = "shockbench-flow", extras = ["rl"], marker = "extra == 'rl'", specifier = ">=0.1.2" },
+    { name = "torch", marker = "extra == 'cuda'" },
 ]
-provides-extras = ["rl"]
+provides-extras = ["cuda", "rl"]
 
 [package.metadata.requires-dev]
 dev = [

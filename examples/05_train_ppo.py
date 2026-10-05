@@ -198,6 +198,7 @@ def main(
     gamma: float = 0.99,
     max_minutes: float | None = None,
     torch_threads: int = 1,
+    device: str = "auto",
     seed: int = 0,
     out: str | None = None,
 ) -> None:
@@ -219,6 +220,7 @@ def main(
         gamma: the discount factor.
         max_minutes: stop training after this much wall time.
         torch_threads: keep 1: more threads compete with the environment workers.
+        device: PyTorch training device (auto uses CUDA when available; or cpu, cuda, cuda:N).
         seed: PPO's seed.
         out: the run folder (default: outputs/05_train_ppo/<date_time>).
 
@@ -248,6 +250,7 @@ def main(
         learning_rate=learning_rate,
         gamma=gamma,
         policy_kwargs={"net_arch": {"pi": arch, "vf": arch}, "activation_fn": ACTIVATIONS[activation]},
+        device=device,
         seed=seed,
     )
     model.set_logger(configure(str(out), ["stdout", "csv"]))

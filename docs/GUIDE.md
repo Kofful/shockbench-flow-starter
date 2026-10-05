@@ -276,10 +276,24 @@ run of your agent per episode. In Python:
 ```python
 from shockbench_flow_agent import EpisodeSet
 
-episodes = EpisodeSet.build("small", "dev")        # references cached on disk
-print(episodes.score("agents/mine"))               # an Agent class, a folder or a zip
-print(episodes.compare("agents/mine", "agents/other"))
+episodes = EpisodeSet.build("small", "dev", n_jobs=-1)  # references cached; all CPU cores
+print(episodes.score("agents/mine", n_jobs=-1))          # parallel agent episodes
+print(episodes.compare("agents/mine", "agents/other", n_jobs=-1))
 ```
+
+The starter's `sbf evaluate` and `sbf compare` also parallelize the agent episodes
+with `--n_jobs` (the package API above defaults to one worker). An agent can opt
+into lock-step policy batching by defining the static method
+`Agent.act_batch(agents, observations) -> actions`; then `--batch_size=32`
+advances that many independent episodes per inference call. The exported PPO
+agent implements it and reads `--device=auto|cpu|cuda|cuda:N`. Install a
+CUDA-capable PyTorch without the training stack with `uv sync --extra cuda`.
+CUDA accelerates policy inference only—the simulator and the SciPy/HiGHS
+clairvoyant references remain CPU work. Runs with `--cpu_budget` use the normal
+per-episode evaluator because a batched call cannot reproduce the server's
+per-week CPU meter. CUDA and batched matrix kernels can round differently from
+the board's CPU inference; use `--device=cpu --batch_size=1` (and `sbf check`)
+when checking exact submission behavior.
 
 - **The first run on a network is slow**: it computes the naive rule's demand
   model and the harm levels' cut points, and the clairvoyant plan of every

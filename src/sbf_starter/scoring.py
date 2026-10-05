@@ -53,11 +53,26 @@ def evaluate(
     entropy: int = 0,
     cpu_budget: bool | float = False,
     n_jobs: int = -1,
+    batch_size: int = 32,
+    device: str = "auto",
     verbose: bool = True,
 ):
-    """One agent's ``Score``; ``str()`` of it is the report."""
-    es = episode_set(task, episodes, quick=quick, entropy=entropy, n_jobs=n_jobs, verbose=verbose)
-    return es.score(_scorable(agent), name=_name(agent), cpu_budget=cpu_budget)
+    """One agent's ``Score``; process-parallel by default, with optional batched CUDA inference."""
+    from sbf_starter.accelerated import check_batch_size, check_device, evaluation_device, score_one
+
+    check_batch_size(batch_size)
+    check_device(device)
+    with evaluation_device(device):
+        # Enter before reference generation so any reusable joblib workers inherit the requested policy device too.
+        es = episode_set(task, episodes, quick=quick, entropy=entropy, n_jobs=n_jobs, verbose=verbose)
+        return score_one(
+            es,
+            _scorable(agent),
+            name=_name(agent),
+            cpu_budget=cpu_budget,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+        )
 
 
 def compare(
@@ -70,12 +85,27 @@ def compare(
     entropy: int = 0,
     cpu_budget: bool | float = False,
     n_jobs: int = -1,
+    batch_size: int = 32,
+    device: str = "auto",
     verbose: bool = True,
 ):
     """A's score minus b's on the same episodes, with a paired interval (a ``Comparison``)."""
-    es = episode_set(task, episodes, quick=quick, entropy=entropy, n_jobs=n_jobs, verbose=verbose)
-    names = (_name(a), _name(b)) if _name(a) and _name(b) else None
-    return es.compare(_scorable(a), _scorable(b), names=names, cpu_budget=cpu_budget)
+    from sbf_starter.accelerated import check_batch_size, check_device, comparison, evaluation_device
+
+    check_batch_size(batch_size)
+    check_device(device)
+    with evaluation_device(device):
+        es = episode_set(task, episodes, quick=quick, entropy=entropy, n_jobs=n_jobs, verbose=verbose)
+        names = (_name(a), _name(b)) if _name(a) and _name(b) else None
+        return comparison(
+            es,
+            _scorable(a),
+            _scorable(b),
+            names=names or (None, None),
+            cpu_budget=cpu_budget,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+        )
 
 
 def as_dict(result) -> dict:

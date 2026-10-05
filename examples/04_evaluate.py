@@ -22,6 +22,8 @@ def main(
     entropy: int = 0,
     cpu_budget: bool = False,
     n_jobs: int = -1,
+    batch_size: int = 32,
+    device: str = "auto",
 ) -> None:
     """Print the score of ``agent``, or its paired comparison with ``against``.
 
@@ -33,10 +35,19 @@ def main(
         quick: seconds, not the leaderboard's numbers.
         entropy: 0 for the public dev episodes; any other integer for scenarios of your own.
         cpu_budget: a week over the task's CPU budget is played by the naive rule, as on the server.
-        n_jobs: workers of a first run's reference computation (-1: all cores).
+        n_jobs: workers for references and ordinary agent episodes (-1: all cores).
+        batch_size: simultaneous episodes when Agent implements act_batch.
+        device: local policy inference device: auto, cpu, cuda or cuda:N.
 
     """
-    options = {"quick": quick, "entropy": entropy, "cpu_budget": cpu_budget, "n_jobs": n_jobs}
+    options = {
+        "quick": quick,
+        "entropy": entropy,
+        "cpu_budget": cpu_budget,
+        "n_jobs": n_jobs,
+        "batch_size": batch_size,
+        "device": device,
+    }
     if against is None:
         result = scoring.evaluate(agent, task, episodes, **options)
         print(result)
