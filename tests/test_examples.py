@@ -80,3 +80,11 @@ def test_dashboard(env_with_cache, tmp_path):
     run("07_dashboard.py", "--episode=29", "--quick", "--n_jobs=1", "--out=run", env=env_with_cache, cwd=tmp_path)
     for name in ("network.png", "dashboard_max.png", "episode_max.gif", "record_random.npz"):
         assert (tmp_path / "run" / name).is_file(), name
+
+
+def test_agent_losses(env_with_cache, tmp_path):
+    args = ["--agent=template", "--episode=29", "--quick", "--n_jobs=1", "--out=run"]
+    out = run("08_agent_losses.py", *args, env=env_with_cache, cwd=tmp_path)
+    assert "excess loss" in out
+    for name in ("network.png", "dashboard_agent.png", "losses_agent.png", "episode_agent.gif", "record_agent.npz"):
+        assert (tmp_path / "run" / name).is_file(), name

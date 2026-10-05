@@ -170,6 +170,7 @@ fits only the network it was made on: use `--task=small` for one you will submit
 | [05_train_ppo.py](examples/05_train_ppo.py)             | PPO (Stable-Baselines3), exported as a submission the server can run (`uv sync --extra rl`) |
 | [06_policy_search.py](examples/06_policy_search.py)     | an evolutionary search over an agent's numbers, and where an LLM proposer fits             |
 | [07_dashboard.py](examples/07_dashboard.py)             | the network map, episode dashboards and a GIF                                              |
+| [08_agent_losses.py](examples/08_agent_losses.py)       | an agent's weekly, cumulative and excess losses against the naive rule                     |
 
 ```bash
 python examples/03_heuristic_agent.py --task=small --episodes=6
@@ -203,7 +204,7 @@ It is your fork: change anything.
 
 ```
 agents/            one folder per agent: template (send the maximum), random, heuristic, and yours
-examples/          01_quickstart.py ... 07_dashboard.py, and ppo_agent.py (the PPO submission's agent.py)
+examples/          01_quickstart.py ... 08_agent_losses.py, and ppo_agent.py (the PPO submission's agent.py)
 src/sbf_starter/   the `sbf` command line
 docs/              GUIDE.md (interface, rules, scoring) and fields/ (every observation and action field)
 scripts/           fields_docs.py: regenerates docs/fields/ after a new shockbench-flow release
