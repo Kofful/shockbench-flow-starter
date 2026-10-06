@@ -25,3 +25,6 @@ __pycache__/
 
 # run folders and zips (the examples and `sbf pack` write here)
 /outputs/
+
+# training data recorded by examples/collect_data.py (large)
+/data/

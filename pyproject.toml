@@ -37,7 +37,13 @@ rl = ["shockbench-flow[rl] >= 0.1.2"]
 sbf = "sbf_starter.cli:main"
 
 [dependency-groups]
-dev = ["ruff", "pytest", "pytest-xdist"]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-xdist",
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+]
 
 [tool.uv.sources]
 # the CPU build on Linux (PyPI's Linux wheel bundles CUDA)
@@ -54,6 +60,7 @@ packages = ["src/sbf_starter"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["agents/*/sbflow"]  # copied from the shockbench-flow package by scripts/vendor_mpc.py
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
