@@ -165,13 +165,19 @@ fits only the network it was made on: use `--task=small` for one you will submit
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | [01_quickstart.py](examples/01_quickstart.py)           | the gymnasium loop with random actions                                                     |
 | [02_play_agents.py](examples/02_play_agents.py)         | agents played under gymnasium, as the scorer plays them                                    |
-| [03_heuristic_agent.py](examples/03_heuristic_agent.py) | a rule that reacts to strait closures, against send-the-maximum                            |
+| [03_heuristic_agent.py](examples/03_heuristic_agent.py) | the history-aware routing/inventory heuristic, against send-the-maximum                    |
 | [04_evaluate.py](examples/04_evaluate.py)               | `sbf evaluate` and `sbf compare` from Python                                               |
 | [05_train_ppo.py](examples/05_train_ppo.py)             | PPO (Stable-Baselines3), exported as a submission the server can run (`uv sync --extra rl`) |
 | [06_policy_search.py](examples/06_policy_search.py)     | an evolutionary search over an agent's numbers, and where an LLM proposer fits             |
 | [07_dashboard.py](examples/07_dashboard.py)             | the network map, episode dashboards and a GIF                                              |
 | [08_agent_losses.py](examples/08_agent_losses.py)       | an agent's weekly, cumulative and excess losses against the naive rule                     |
 | [09_compare_plans.py](examples/09_compare_plans.py)     | agent/naive/clairvoyant dashboards, detailed cost attribution and paired action interventions |
+| [10_heuristic_diagnostics.py](examples/10_heuristic_diagnostics.py) | heuristic planner statuses, complete episode costs, CPU times and history checks |
+
+The [heuristic agent](agents/heuristic/README.md) now plans inventory, routes and
+tanker releases jointly, using the masked fields and episode history described
+in `docs/fields/small.md`. It runs on CPU without training or additional packages.
+Its rolling model is approximate; use paired evaluation to measure improvements.
 
 Compare an agent with naive and the exact clairvoyant plan on the same scenario:
 
@@ -240,7 +246,7 @@ It is your fork: change anything.
 
 ```
 agents/            one folder per agent: template (send the maximum), random, heuristic, and yours
-examples/          01_quickstart.py ... 09_compare_plans.py, and ppo_agent.py (the PPO submission's agent.py)
+examples/          01_quickstart.py ... 10_heuristic_diagnostics.py, and ppo_agent.py (the PPO submission's agent.py)
 src/sbf_starter/   the `sbf` command line
 docs/              GUIDE.md (interface, rules, scoring) and fields/ (every observation and action field)
 scripts/           fields_docs.py: regenerates docs/fields/ after a new shockbench-flow release

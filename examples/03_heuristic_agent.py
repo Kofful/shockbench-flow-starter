@@ -3,7 +3,10 @@
     uv run python examples/03_heuristic_agent.py
     uv run python examples/03_heuristic_agent.py --task=small --episodes=6
 
-Where no strait closes the two play the same, so only episodes with a closure are shown.
+Closure episodes illustrate routing changes. The history-aware heuristic now
+also differs from send-the-maximum without a closure: it plans inventories,
+forecasts, production inputs and queue releases. This selection is a diagnostic,
+not an unbiased estimate of its full evaluation score.
 """
 
 import fire

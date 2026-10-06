@@ -1045,3 +1045,196 @@ cent net totals, every component attribution, zero unchanged-control savings,
 masked unavailable LP fields, embedded HTML data and every report artifact
 link. Ruff lint/format and `git diff --check` passed on the new/modified
 dashboard code. No files in `tests/` were run, and all changes remain local.
+
+## 19. History-aware heuristic and complete Small field coverage
+
+Date: 2026-10-06. Request: update `agents/heuristic` to consider available
+actions, forecasts, current state and previous weeks using
+`docs/fields/small.md`, minimizing losses. This is a separate deterministic
+controller change; neither the RL/PPO weights nor their training code changed.
+
+### 19.1 Inspect and preserve the baseline
+
+Read the complete Small field reference, the guide's interface/rules, the
+existing heuristic, public instance tables, scoring/check code and installed
+simulation/production/clip/queue/cost implementations. These were read-only
+inspections; the benchmark package was not edited. The old heuristic used only
+maximum capacities, masks and observed closures, ignoring forecasts and most
+state. Preserved it in `outputs/heuristic_update/before/agent.py` for paired
+comparison before changing the local source. The unrelated `dotvenv.zip` was
+left untouched.
+
+### 19.2 Replace the simple rule with a rolling planner
+
+Implemented a sparse SciPy LP inside `agents/heuristic/agent.py`, importing
+only standard library, NumPy and SciPy. Each week plans up to 24 weeks ahead
+and executes only the first week's flow and queue decisions. All dispatch and
+override slots enter the optimization, not just nominal-plan routes. It returns
+all three action arrays; continuous quantities are optimized jointly, not
+exhaustively enumerated. Shapes are read from `config['spaces']['action']` and
+checked against public slot/release tables.
+
+The model balances stocks, backlog, scheduled pipeline arrivals, existing WIP,
+source replenishment, wafer-to-raw-chip production, packaging and grid fuel.
+Ordinary dispatch is bounded by previous end-of-week stock; it cannot consume
+today's later arrivals or source lift. Chokepoint arrivals are available before
+tanker release. Shared edge, source stock, estimated downstream pool throughput
+and extra-transit fleet limits couple routes. Costs include all eight published
+components, with shortage/shed penalties taken from public economic tables.
+
+The real simulator, not the submission, controls production and generation.
+The model's production/energy variables are planning approximations, not
+additional agent actions. New sea-lane trips are aggregated, existing container
+queue releases are estimated, and future graph conditions persist unless an
+announced reopening/prohibition supplies another date. This does not reproduce
+the exact clairvoyant oracle or establish global optimality.
+
+At the true episode end use public stock salvage. At earlier window boundaries
+use bounded downstream continuation values and safety buffers, preventing
+myopic draining of the supply chain. Default solve wall limit is 0.65 seconds.
+An unsuccessful solve plays an internal nominal/reserve controller, records
+`solver_failures` and exposes status/horizon/size in `last_plan`. This is
+separate from the scorer's naive fallback.
+
+### 19.3 Preserve and use history; respect hidden values
+
+Store independent copies of every weekly observation/mask and returned action
+in episode-local `history`/`actions`. Use all observed past forecast residuals
+for shrunk demand-bias calibration, cumulative requested/executed quantities
+for a weak reliability tie-break and throughput buffers, demand/served/lost
+totals for sink reserves, all prior shed measurements for grid reserves, and
+all eight accumulated cost components for bounded distress/waste adjustments.
+The latest observed graph/stock/backlog survives a blackout, initialized from
+public nominal values and reset prohibitions. Preserve previously announced
+pending dates through missing coverage; an observed lifting supersedes them.
+
+Every visible demand forecast column participates. Beyond forecast coverage
+use public seasonal means with historical calibration. Region, dyad and
+chokepoint warnings add soft route risk, not false hard sanctions. Live message
+identifiers/masks select threads; target/region/commodity map affected routes,
+channel/kind sets confidence, and announcement/effective weeks set age/urgency.
+Withdrawals do not predict future events. Current cargo lists supersede older
+ones: arrived pipeline entries must not be counted again merely because history
+retains them. Prior raw observations are retained for inspection, not blindly
+summed as fresh stock. `agents/heuristic/README.md` contains a field-by-field
+coverage table and the precise approximation/interface limitations.
+
+### 19.4 Development checks and corrections
+
+Initial smoke checks exposed source stocks without holding/salvage fields and
+release pairs without a declared commodity stock. Added safe public defaults
+instead of assuming every raw node has every stock key. Read supply rates from
+`stock[commodity]['supply_rate']`. Tiny has unpowered fabs (`grid=None`);
+only powered fabs contribute grid draw. Both Tiny's padded lots and
+Small/Full's dense cohort matrix are supported.
+
+Added shared downstream edge/pool and fleet-divergence constraints after the
+first version, plus dated incoming-cargo checks and FIFO cohort congestion.
+This refinement improved the independent eight-scenario quick comparison
+against the first LP version by 0.062718 (90% paired interval
+0.030954–0.093060, rounded). These are development diagnostics, not exact
+leaderboard results.
+
+The complete Tiny diagnostics caught masked zero overrides: the flat converter
+emits EVERY slot in a pair when mode 1 is used, including zero quantities.
+Masked zeros are still logged as invalid. Corrected the agent to use custom
+release only when all pair slots are visibly valid, otherwise default release
+for a desired positive release or hold for a desired zero release. It cannot
+encode arbitrary partial overrides in this flat action interface. No benchmark
+converter was patched to conceal the limitation.
+
+Added `examples/10_heuristic_diagnostics.py`, a self-contained Fire example
+defaulting to Tiny. It records full NPZ episodes and JSON with actual costs,
+planner statuses, internal fallbacks, CPU timing and history length. It checks
+action space/dtypes, finite nonnegative values, known masks, observation
+immutability and simulator validity. Its initial wrapper-constructor and
+trajectory-property mistakes were corrected during smoke runs. A separate
+masked-value check initially used an integer too large for int8; corrected the
+check to use dtype-safe sentinels, not by changing agent semantics.
+
+Updated the main README and the old `03_heuristic_agent.py` description: the
+heuristic no longer acts identically to send-maximum in non-closure episodes.
+The only final constructor addition after scoring was public shape validation;
+it does not change decisions for valid Tiny/Small/Full configs.
+
+### 19.5 Measured performance
+
+All comparisons use the same scenarios for the new and preserved old agent,
+standard regime, `n_jobs=2` and `cpu_budget=True`. Independent development
+roots were 20261010/20261011. The final independent root was 20261012; no policy
+tuning followed its results. Dev root 0 was used for final confirmation.
+
+| Comparison | Updated | Old heuristic | Paired gain | 90% paired interval |
+| --- | ---: | ---: | ---: | --- |
+| Initial LP, 8 independent Small, quick, root 20261010 | 0.496864 | 0.342094 | +0.154770 | +0.0774 to +0.2394 |
+| Intermediate, 20 independent Small, exact, root 20261011 | 0.5474 | 0.4156 | +0.1318 | +0.0839 to +0.1820 |
+| Final, 64 independent Small, exact, root 20261012 | **0.615812** | **0.413256** | **+0.202556** | **+0.172224 to +0.236780** |
+| Final, 20-episode Small dev, exact, root 0 | **0.644382** | **0.400373** | **+0.244009** | **+0.180722 to +0.312204** |
+
+The final 64-scenario comparison reports mean cost $2,681,860,697,844.65 versus
+$2,884,445,447,248.57, a **7.02% reduction**. Both final comparisons report
+zero scorer fallback weeks. Quick numbers use rough naive references; the two
+final rows use exact 1,000-replication naive references and exact oracles.
+RSS is the scorer's reported score, not percentage demand served. These
+measurements do not establish a 0.8–0.9 score or the minimum attainable loss.
+
+Saved comparisons under `outputs/heuristic_update/` as
+`initial_comparison.json`, `confirmation.json`,
+`refinement_comparison.json`, `final_independent.json`, `final_dev.json`.
+
+### 19.6 Submission and diagnostic validation
+
+Isolated `sbf check heuristic` passed on Small and Full with allowed imports,
+valid submissions and no over-budget weeks. Small week 1/max was 0.208 CPU
+seconds, median 0.1208; Full week 1 was 0.503, median 0.3991 and max 0.563
+seconds, against budgets 2 and 4 seconds. A final Small check repeated after
+the shape-validation guard passed with week 1/max 0.245 seconds and median
+0.1032 seconds. These are this machine's CPU measurements, not a
+claim about another server or a Docker run.
+
+Complete diagnostic episodes passed on Tiny, Small and Full, with no internal
+solver fallbacks or invalid actions in the successful records. Standard Small
+root 20261012 episodes 0/1 cost $2,450,978,795,244.99 /
+$1,634,109,911,955.87; the same root's prediction-free episode 0 cost
+$2,456,197,624,141.74 (a compatibility check, not an information-value study).
+Tiny episode 0 cost $3,221,714,754.81. Full episode 0 cost
+$2,152,939,164,958.07, with max weekly CPU 0.527 seconds. Task sizes/scenarios
+differ, so these costs are not comparable across tasks. Diagnostic JSON/NPZ
+files are in `tiny_diagnostics`, `small_diagnostics`, `full_diagnostics` and
+`prediction_free_diagnostics` under the run directory.
+
+Separate fresh-agent checks poisoned every hidden/padded value and verified
+identical actions to tolerance: 30,836 entries on Tiny, 41,341 on Small,
+59,707 on Full. They also verified separate episode histories and that changing
+the caller's stock array cannot mutate stored history. These were direct
+in-process checks, not pytest or execution of anything under `tests/`.
+
+Generated the existing three-plan dashboard for the new heuristic on dev
+Small episode 0, using exact references and no intervention audits:
+`outputs/heuristic_update/dev_episode0_dashboard/index.html`.
+Costs: heuristic **$3,439,687,116,611.93**, naive
+**$3,935,505,276,240.43**, clairvoyant **$3,152,354,959,380.31**.
+The dashboard's replay, component reconciliation and invalid-action checks
+passed. This one-case comparison is not the multi-episode RSS above.
+
+Reproduce with:
+
+```bash
+uv run --no-sync sbf compare heuristic outputs/heuristic_update/before \
+  --task=small --episodes=64 --entropy=20261012 --n_jobs=2 --cpu_budget \
+  --out=outputs/heuristic_update/final_independent.json
+uv run --no-sync sbf compare heuristic outputs/heuristic_update/before \
+  --task=small --episodes=dev --n_jobs=2 --cpu_budget \
+  --out=outputs/heuristic_update/final_dev.json
+uv run --no-sync sbf check heuristic --task=small
+uv run --no-sync sbf check heuristic --task=full
+uv run --no-sync python examples/10_heuristic_diagnostics.py --task=small --episodes=2
+uv run --no-sync python examples/09_compare_plans.py --agent=heuristic \
+  --task=small --episode=0 --audit_weeks=0
+```
+
+Commands used writable caches `UV_CACHE_DIR=/tmp/sbf-uv-cache` and
+`SBF_CACHE_DIR=/tmp/sbf-ppo-cache`; dashboard rendering also used
+`MPLCONFIGDIR=/tmp/sbf-matplotlib`. Lint, formatting and `git diff --check`
+were run on changed source. No pytest, `tests/` scripts, Codabench mocks,
+uploads, dependency upgrades, PyPI publication or `.venv` edits occurred.
