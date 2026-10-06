@@ -6,9 +6,10 @@ runs deterministic inference.  Each ``Agent`` keeps the previous week's
 features and the actor's recurrent state, so decisions use current, previous,
 and longer-horizon episode information.
 
-The neural policy predicts bounded corrections around a safe nominal dispatch
-rule.  Known prohibitions, closed chokepoints, current first-edge capacity and
-end-of-horizon deadlines are projected deterministically after inference.
+The neural policy predicts full-range corrections around a nominal dispatch
+rule and controls queue releases. Known prohibitions and zero first-edge
+capacity are projected out; closures and deadlines inform the baseline and
+features without excluding otherwise legal actions.
 """
 
 import math
@@ -20,9 +21,9 @@ import numpy as np
 import torch
 
 
-FEATURE_VERSION = 1
-STATIC_DIM = 12
-DYNAMIC_DIM = 28
+FEATURE_VERSION = 3
+STATIC_DIM = 24
+DYNAMIC_DIM = 48
 FEATURE_DIM = STATIC_DIM + 3 * DYNAMIC_DIM
 EPS = 1e-4
 
@@ -91,15 +92,18 @@ def _device() -> torch.device:
     return device
 
 
-DEVICE = _device()
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", FutureWarning)
-    POLICY = torch.jit.load(str(Path(__file__).resolve().with_name("policy.pt")), map_location=DEVICE)
-POLICY.eval()
-if int(POLICY.feature_version) != FEATURE_VERSION or int(POLICY.feature_dim) != FEATURE_DIM:
-    raise RuntimeError("policy.pt was exported for a different feature schema; retrain agents/ppo")
-HIDDEN_SIZE = int(POLICY.hidden_size)
-RESIDUAL_SCALE = float(POLICY.residual_scale)
+POLICY = None
+DEVICE = torch.device("cpu")
+HIDDEN_SIZE = 64
+RESIDUAL_SCALE = 1.0
+if os.environ.get("SBF_PPO_FEATURES_ONLY") != "1":
+    DEVICE = _device()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        POLICY = torch.jit.load(str(Path(__file__).resolve().with_name("policy.pt")), map_location=DEVICE)
+    POLICY.eval()
+    HIDDEN_SIZE = int(POLICY.hidden_size)
+    RESIDUAL_SCALE = float(POLICY.residual_scale)
 
 
 def _log_ratio(value, scale):
@@ -110,7 +114,7 @@ def _log_ratio(value, scale):
 class FeatureBuilder:
     """Convert the variable-size observation into one fixed-width row per action slot."""
 
-    def __init__(self, config):
+    def __init__(self, config, queue_control=False):
         self.T = int(config["T"])
         static = config["static"]
         instance = static["instance"]
@@ -119,7 +123,15 @@ class FeatureBuilder:
             raise ValueError(f"unsupported instance {static['instance_id']!r}")
         self.parameters = _RESERVE[task]
 
-        slots = static["action_slots"]
+        slots = {key: list(value) for key, value in static["action_slots"].items()}
+        self.n_dispatch = len(slots["edge"])
+        self.queue_control = queue_control
+        self.override_slots = static["override_slots"]
+        self.release_pairs = [tuple(pair) for pair in config["layout"]["release_pairs"]]
+        if queue_control:
+            slots["edge"].extend(self.override_slots["out_edge"])
+            slots["k"].extend(self.override_slots["k"])
+            slots["lane"].extend(self.override_slots["lane"])
         edges = static["edges"]
         lanes = static["lanes"]
         nodes = static["nodes"]
@@ -142,6 +154,8 @@ class FeatureBuilder:
         self.transit = np.empty(self.n_slots, dtype=np.float64)
         for i, (edge, lane) in enumerate(zip(self.slot_edge, self.slot_lane, strict=True)):
             path = [int(edge)] if lane < 0 else [int(x) for x in lanes["edges"][lane]]
+            if i >= self.n_dispatch:
+                path = path[path.index(int(edge)) :]
             self.paths.append(path)
             self.route_chokepoints.append([] if lane < 0 else [int(x) for x in lanes["chokepoints"][lane]])
             self.transit[i] = float(np.sum(self.edge_tau0[path]))
@@ -184,6 +198,12 @@ class FeatureBuilder:
             dtype=np.int64,
         )
         self.stock_pair_index = stock_positions
+        self.destinations = np.asarray([self.edge_head[path[-1]] for path in self.paths], dtype=np.int64)
+        self.demands = [tuple(pair) for pair in config["layout"]["demands"]]
+        self.grids = list(config["layout"]["grids"])
+        self.fab_position = {node: i for i, node in enumerate(config["layout"]["fabs"])}
+        self.osat_position = {node: i for i, node in enumerate(config["layout"]["osats"])}
+        self.supply_position = {tuple(pair): i for i, pair in enumerate(config["layout"]["supply_slots"])}
         self.chokepoint_position = {int(node): i for i, node in enumerate(config["layout"]["chokepoints"])}
         self.lot_keys = [tuple(int(x) for x in key) for key in config["layout"].get("lot_keys", ())]
         self.warning_chokepoint = {}
@@ -192,11 +212,52 @@ class FeatureBuilder:
                 self.warning_chokepoint[int(unit[1])] = i
 
         raw_nodes = {node["id"]: node for node in instance["nodes"]}
+        self.raw_nodes = [raw_nodes[name] for name in nodes["id"]]
+        self.commodity_ids = commodity_ids
         grid_load = []
         for node in config["layout"]["grids"]:
             grid_load.append(float(raw_nodes[nodes["id"][node]]["grid"]["base_load"]))
         self.grid_load = max(float(np.sum(grid_load)), 1.0)
+        self.grid_loads = np.asarray(grid_load)
         self.total_capacity = max(float(np.sum(self.capacity)), 1.0)
+
+        # Reachability includes production transformations, not just transport.
+        # It relates each input route to the sinks/grids its cargo can serve.
+        adjacency = {}
+        for edge, commodity, destination in zip(self.slot_edge, self.slot_k, self.destinations, strict=True):
+            adjacency.setdefault((int(self.edge_tail[edge]), int(commodity)), set()).add(
+                (int(destination), int(commodity))
+            )
+        commodity_index = {name: i for i, name in enumerate(commodity_ids)}
+        for node, raw in enumerate(self.raw_nodes):
+            if "fab" in raw:
+                fab = raw["fab"]
+                adjacency.setdefault((node, commodity_index[fab["input"]]), set()).add(
+                    (node, commodity_index[fab["product"]])
+                )
+            if "osat" in raw:
+                for source, product in raw["osat"]["packages"].items():
+                    adjacency.setdefault((node, commodity_index[source]), set()).add((node, commodity_index[product]))
+        self.demand_reach = np.zeros((self.n_slots, len(self.demands)))
+        self.grid_reach = np.zeros((self.n_slots, len(self.grids)))
+        for slot, (destination, commodity) in enumerate(zip(self.destinations, self.slot_k, strict=True)):
+            seen, pending = set(), [(int(destination), int(commodity))]
+            while pending:
+                pair = pending.pop()
+                if pair not in seen:
+                    seen.add(pair)
+                    pending.extend(adjacency.get(pair, ()) - seen if pair in adjacency else ())
+            self.demand_reach[slot] = [float(pair in seen) for pair in self.demands]
+            self.grid_reach[slot] = [
+                float(
+                    any(
+                        (node, commodity_index[k]) in seen
+                        for k in self.raw_nodes[node]["grid"]["shares"]
+                        if k in commodity_index
+                    )
+                )
+                for node in self.grids
+            ]
 
         self.static_features = np.zeros((self.n_slots, STATIC_DIM), dtype=np.float32)
         for i, stage in enumerate(stages):
@@ -208,11 +269,30 @@ class FeatureBuilder:
             self.static_features[i, 5] = float(self.slot_lane[i] >= 0)
             self.static_features[i, 6] = float(self.nominal[i] > 0.0)
             self.static_features[i, 7 + ("source", "terminal", "fab", "osat", "other").index(stage)] = 1.0
+            destination = self.destinations[i]
+            destination_type = self.node_types[destination]
+            self.static_features[i, 12] = self.slot_k[i] / max(len(commodity_ids) - 1, 1)
+            self.static_features[i, 13] = self.edge_tail[self.slot_edge[i]] / max(len(self.node_types) - 1, 1)
+            self.static_features[i, 14] = destination / max(len(self.node_types) - 1, 1)
+            for j, kind in enumerate(("terminal", "grid", "fab", "osat", "sink", "source")):
+                self.static_features[i, 15 + j] = float(destination_type == kind)
+            self.static_features[i, 21] = float(commodities["pool"][self.slot_k[i]] == "tb")
+            self.static_features[i, 22] = float(np.any(self.demand_reach[i]))
+            self.static_features[i, 23] = float(np.any(self.grid_reach[i]))
 
         self.previous_dynamic = None
         self.last_scale = self.capacity.copy()
         self.last_base = np.zeros(self.n_slots, dtype=np.float64)
         self.last_active = np.zeros(self.n_slots, dtype=np.float64)
+        self.release_weights = np.zeros((len(self.release_pairs), self.n_slots), dtype=np.float32)
+        if queue_control:
+            for slot, (node, commodity) in enumerate(
+                zip(self.override_slots["chokepoint"], self.override_slots["k"], strict=True)
+            ):
+                self.release_weights[self.release_pairs.index((node, commodity)), self.n_dispatch + slot] = 1.0
+            self.release_weights /= np.maximum(self.release_weights.sum(axis=1, keepdims=True), 1.0)
+            self.static_features[self.n_dispatch :, 0] = 0.0
+        self.last_release_active = np.zeros(len(self.release_pairs), dtype=np.float32)
 
     def reset(self):
         self.previous_dynamic = None
@@ -331,6 +411,16 @@ class FeatureBuilder:
         for i, (commodity, lane, path) in enumerate(zip(self.slot_k, self.slot_lane, self.paths, strict=True)):
             for edge in path:
                 queued[i] += queue_map.get((edge, int(commodity), int(lane)), 0.0)
+            if i >= self.n_dispatch:
+                cp = int(self.edge_tail[path[0]])
+                tail_stock[i] = sum(
+                    q for (edge, k, _lane), q in queue_map.items() if self.edge_tail[edge] == cp and k == commodity
+                )
+                tail_stock[i] += sum(
+                    max(float(p_qty[j]), 0.0)
+                    for j in self._valid(observation, "pipeline.edge")
+                    if self.edge_head[p_edge[j]] == cp and p_k[j] == commodity and p_arrival[j] <= week
+                )
 
         pending_week = np.full(self.n_slots, self.T + 1, dtype=np.int64)
         valid = self._valid(observation, "pending_prohibitions.edge")
@@ -390,9 +480,15 @@ class FeatureBuilder:
         costs = np.asarray(observation["last_week.cost_components"], dtype=np.float64)
         cost_scale = self.total_capacity * 1_000.0
         recent_cost = float(_log_ratio(np.sum(np.maximum(costs, 0.0)), cost_scale))
-        requested = np.asarray(observation["last_week.clip.requested"], dtype=np.float64)
-        executed = np.asarray(observation["last_week.clip.executed"], dtype=np.float64)
+        requested = np.pad(
+            np.asarray(observation["last_week.clip.requested"], dtype=np.float64), (0, self.n_slots - self.n_dispatch)
+        )
+        executed = np.pad(
+            np.asarray(observation["last_week.clip.executed"], dtype=np.float64), (0, self.n_slots - self.n_dispatch)
+        )
         action_mask = np.asarray(observation["action_mask"], dtype=np.float64)
+        if self.queue_control:
+            action_mask = np.concatenate((action_mask, observation["override_mask"]))
 
         # The training action wrapper and the server both interpret the actor's
         # fraction against nominal slot capacity.  Current capacity remains a
@@ -410,7 +506,7 @@ class FeatureBuilder:
             cap_ratio = float(np.clip(available / max(self.capacity[i], EPS), 0.0, 2.0) / 2.0)
             current_cost = 0.0
             nominal_cost = max(float(np.sum(self.edge_c0[path])), EPS)
-            observed_parts = [float(graph_u_obs[first]), float(action_mask[i] >= 0.0)]
+            observed_parts = [float(graph_u_obs[first]), float(np.asarray(observation["action_mask.observed"]).item())]
             current_tau = 0.0
             is_prohibited = 0.0
             for route_edge in path:
@@ -448,15 +544,36 @@ class FeatureBuilder:
             key = (int(self.edge_tail[first]), int(commodity))
             current_nominal = self.nominal[i] / max(scale[i], EPS)
             base[i] = np.clip(current_nominal + self.reserve[i] * (1.0 - current_nominal), 0.0, 1.0)
+            if i >= self.n_dispatch:
+                base[i] = 0.0  # mode 0 preserves simulator default until learned.
             base[i] *= open_value ** float(self.parameters["closure_power"])
-            active[i] = float(
-                week <= self.last_useful[i]
-                and available > EPS
-                and action_mask[i] > 0.0
-                and is_prohibited <= 0.0
-                and open_value > 0.0
-            )
+            active[i] = float(available > EPS and action_mask[i] > 0.0 and is_prohibited <= 0.0)
+            # Closures/deadlines are features and baseline preferences. They
+            # must not remove legal pre-positioning decisions from PPO.
+            if week > self.last_useful[i]:
+                base[i] = 0.0
             base[i] *= active[i]
+
+            destination = int(self.destinations[i])
+            dest_key = (destination, int(commodity))
+            dest_position = self.stock_pair_index.get(dest_key, -1)
+            dest_stock = stock[dest_position] if dest_position >= 0 and stock_observed[dest_position] else 0.0
+            reach = self.demand_reach[i]
+            reach_count = max(float(np.sum(reach)), 1.0)
+            grid_reach = self.grid_reach[i]
+            local_lost = float(reach @ lost / max(float(reach @ demand), 1.0))
+            local_shed = float(grid_reach @ shed / max(float(grid_reach @ self.grid_loads), 1.0))
+            backlog = np.asarray(observation["backlog.qty"], dtype=np.float64)
+            supply_position = self.supply_position.get(key, -1)
+            supply = float(observation["graph_now.supply.avail"][supply_position]) if supply_position >= 0 else 0.0
+            fab_position = self.fab_position.get(destination, -1)
+            osat_position = self.osat_position.get(destination, -1)
+            fab_cap = float(observation["graph_now.fab.cap_eff"][fab_position]) if fab_position >= 0 else 0.0
+            fab_alpha = float(observation["graph_now.fab.alpha_bar"][fab_position]) if fab_position >= 0 else 0.0
+            osat_cap = float(observation["graph_now.osat.thr_eff"][osat_position]) if osat_position >= 0 else 0.0
+            destination_raw = self.raw_nodes[destination]
+            stock_config = destination_raw.get("stock", {}).get(self.commodity_ids[commodity], {})
+            storage = max(float(stock_config.get("storage", scale[i])), EPS)
 
             dynamic[i] = (
                 week / self.T,
@@ -487,11 +604,45 @@ class FeatureBuilder:
                 msg_nearness,
                 recent_cost,
                 float(np.clip(np.mean(observed_parts), 0.0, 1.0)),
+                _log_ratio(dest_stock, scale[i]),
+                _log_ratio(inbound.get(dest_key, 0.0), scale[i]),
+                _log_ratio(inbound_soon.get(dest_key, 0.0), scale[i]),
+                _log_ratio(wip.get(dest_key, 0.0), scale[i]),
+                _log_ratio(wip_soon.get(dest_key, 0.0), scale[i]),
+                _log_ratio(float(reach @ forecast[:, 0]) / reach_count, scale[i]),
+                _log_ratio(float(reach @ np.sum(forecast, axis=1)) / reach_count, scale[i]),
+                _log_ratio(float(reach @ backlog) / reach_count, scale[i]),
+                np.clip(local_lost, 0.0, 1.0),
+                np.clip(local_shed, 0.0, 1.0),
+                np.clip(lost_share, 0.0, 1.0),
+                np.clip(shed_share, 0.0, 1.0),
+                _log_ratio(supply, scale[i]),
+                _log_ratio(fab_cap, scale[i]),
+                np.clip(fab_alpha, 0.0, 1.0),
+                _log_ratio(osat_cap, scale[i]),
+                np.clip(dest_stock / storage, 0.0, 1.0),
+                np.clip((requested[i] - executed[i]) / max(requested[i], EPS), 0.0, 1.0),
+                np.clip((self.last_useful[i] - week) / max(self.T, 1), -1.0, 1.0),
+                float(dest_position >= 0 and stock_observed[dest_position]),
             )
 
         self.last_scale = scale
         self.last_base = base
         self.last_active = active
+        if self.queue_control:
+            # Arrivals become queue inventory before this week's releases.
+            # Include observed shipments arriving now, without future omega.
+            for pair_index, pair in enumerate(self.release_pairs):
+                cp, commodity = pair
+                quantity = sum(
+                    q for (edge, k, _lane), q in queue_map.items() if self.edge_tail[edge] == cp and k == commodity
+                )
+                for j in self._valid(observation, "pipeline.edge"):
+                    if self.edge_head[p_edge[j]] == cp and p_k[j] == commodity and p_arrival[j] <= week:
+                        quantity += max(float(p_qty[j]), 0.0)
+                self.last_release_active[pair_index] = float(
+                    quantity > EPS and np.any(self.release_weights[pair_index] * active)
+                )
         return dynamic.astype(np.float32)
 
     def encode(self, observation):
@@ -503,25 +654,39 @@ class FeatureBuilder:
 
 
 def _fractions(base, active, mean):
-    clipped = np.clip(base, EPS, 1.0 - EPS)
-    logits = np.log(clipped) - np.log1p(-clipped)
-    return (1.0 / (1.0 + np.exp(-(logits + RESIDUAL_SCALE * np.tanh(mean))))) * active
+    # Full-range additive corrections preserve the exact baseline at zero,
+    # including endpoints; zero/full routes can now change substantially.
+    return np.clip(base + RESIDUAL_SCALE * np.tanh(mean), 0.0, 1.0) * active
 
 
 class Agent:
     """Stateful deterministic actor; exploration exists only in ``train.py``."""
 
     def __init__(self, config):
-        self.features = FeatureBuilder(config)
+        if POLICY is None:
+            raise RuntimeError("feature-only training import cannot run evaluation without loading a policy")
+        if int(POLICY.feature_version) != FEATURE_VERSION or int(POLICY.feature_dim) != FEATURE_DIM:
+            raise RuntimeError("policy.pt uses an older feature schema; migrate with train.py --migrate_only")
+        self.features = FeatureBuilder(config, queue_control=True)
         self.hidden = torch.zeros((1, self.features.n_slots, HIDDEN_SIZE), dtype=torch.float32, device=DEVICE)
 
     def act(self, observation):
         encoded = self.features.encode(observation)
         x = torch.as_tensor(encoded[None], dtype=torch.float32, device=DEVICE)
         with torch.inference_mode():
-            mean, _log_std, _value, self.hidden = POLICY(x, self.hidden)
+            mean, _log_std, _value, self.hidden, release_logits = POLICY(x, self.hidden)
         fraction = _fractions(self.features.last_base, self.features.last_active, mean[0].cpu().numpy())
-        return {"flows": fraction * self.features.last_scale}
+        modes = self._release_modes(release_logits[0].cpu().numpy())
+        split = self.features.n_dispatch
+        return {
+            "flows": fraction[:split] * self.features.last_scale[:split] * observation["action_mask"],
+            "override_qty": fraction[split:] * self.features.last_scale[split:] * observation["override_mask"],
+            "release_mode": modes,
+        }
+
+    def _release_modes(self, route_logits):
+        logits = self.features.release_weights @ route_logits
+        return np.where(self.features.last_release_active > 0.0, np.argmax(logits, axis=-1), 0).astype(np.int64)
 
     @staticmethod
     def act_batch(agents, observations):
@@ -533,13 +698,23 @@ class Agent:
         encoded = np.stack([agent.features.encode(obs) for agent, obs in zip(agents, observations, strict=True)])
         hidden = torch.cat([agent.hidden for agent in agents], dim=0)
         with torch.inference_mode():
-            mean, _log_std, _value, next_hidden = POLICY(
+            mean, _log_std, _value, next_hidden, release_logits = POLICY(
                 torch.as_tensor(encoded, dtype=torch.float32, device=DEVICE), hidden
             )
         means = mean.cpu().numpy()
+        release_logits = release_logits.cpu().numpy()
         actions = []
         for i, agent in enumerate(agents):
             agent.hidden = next_hidden[i : i + 1]
             fraction = _fractions(agent.features.last_base, agent.features.last_active, means[i])
-            actions.append({"flows": fraction * agent.features.last_scale})
+            split = agent.features.n_dispatch
+            actions.append(
+                {
+                    "flows": fraction[:split] * agent.features.last_scale[:split] * observations[i]["action_mask"],
+                    "override_qty": fraction[split:]
+                    * agent.features.last_scale[split:]
+                    * observations[i]["override_mask"],
+                    "release_mode": agent._release_modes(release_logits[i]),
+                }
+            )
         return actions

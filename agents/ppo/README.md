@@ -1,92 +1,128 @@
-# Recurrent residual PPO agent
+# Recurrent PPO with dispatch and queue control
 
-This folder contains both halves of the local-only workflow:
+`agent.py` imports only the standard library, NumPy and Torch, loads
+`policy.pt` once, and uses current/previous weekly features plus GRU memory.
+Evaluation performs neural inference and action masking. `train.py` runs
+PPO; `pretrain.py` optionally initializes it from a planner that sees only
+public observations. Both training programs stay local.
 
-- `agent.py` is the submission runtime. It imports only NumPy, Torch and the
-  standard library, loads `policy.pt` once, maintains previous-week features
-  and recurrent state, and returns deterministic flows.
-- `train.py` is the training program. It may use the repository's RL-only
-  packages; it is never imported by `agent.py`.
-- `policy.pt` is the installed TorchScript actor. The committed initial file is
-  a zero-residual network, so it starts from the same tuned controller as
-  `agents/rl` instead of random actions. A serious training run should replace
-  it using `--install`.
+0.8–0.9 RSS is an experimental target, not a guaranteed result. RSS measures
+savings relative to naive and clairvoyant references, not demand served.
 
-## What was changed relative to `examples/05_train_ppo.py`
+The installed Small checkpoint completed 100 PPO updates (41,600 weekly
+transitions, 800 training episodes). Its best exact 100-scenario validation
+RSS was **0.56061**, at update 40. It did not meet the target. Both local teacher
+pretraining experiments decreased imitation loss but hurt evaluation RSS,
+so neither was installed. See `agents/rl/LOG.md` for measured outcomes.
 
-The actor uses shared per-route encoders and pooled network context, so one
-architecture supports Tiny, Small and Full shapes. Its compact features retain
-stock, inbound pipeline, WIP, queued cargo, capacity, freight/tariff changes,
-transit time, prohibitions, chokepoint state, warnings, pending sanctions,
-closure timing, last execution, demand pressure and shortages. Every decision
-contains the current values, previous values and their difference. A GRU also
-retains information from earlier weeks.
+Independent confirmation on 100 fresh Small scenarios scored **0.56579**
+versus **0.56274** for the previous PPO: gain 0.00306, with a 90% paired
+interval of [0.00234, 0.00379]. Both had zero fallback weeks. This is a small
+measured improvement, not a demonstrated 0.8–0.9 agent.
 
-PPO predicts bounded residuals around a strong nominal controller. Known
-illegal, closed and too-late routes are projected out. Training uses `gamma=1`
-by default because the benchmark scores undiscounted episode cost. The trainer
-also provides:
+## Fixes to the original PPO implementation
 
-- parallel scenario environments and CUDA-batched policy updates;
-- deterministic non-dev training roots refreshed during long runs;
-- a distinct fixed validation root with exact RSS model selection;
-- root 0 only as an optional final report, never as a selection signal;
-- GAE, PPO/value clipping, entropy regularisation, gradient clipping, target-KL
-  stopping and learning-rate annealing;
-- periodic best/latest exports, atomic resumable checkpoints, early stopping,
-  full settings, and `history.csv` with policy/value losses and RSS.
+- Full-range additive actions: `clip(baseline + tanh(latent), 0, 1)` retains
+  the baseline at zero but allows zero/full routes to change substantially.
+- Contiguous sequence minibatches, GRU backpropagation across weeks, memory
+  burn-in, and resets at episode boundaries.
+- Destination stock/inbound/WIP, connected sink forecasts/backlogs/shortages,
+  connected grid shedding, factory capacity/power, and source availability.
+  Reachability includes production transformations. Inputs retain current
+  values, previous values, and differences.
+- Learned override quantities and categorical default/override/hold decisions.
+  Queue features include observed shipments arriving this week.
+- Explicit dispatch and override masks. `action_mask` is an observation field,
+  not a return field. Mask confidence respects blackout flags. Closures and
+  nominal deadlines are preferences/features rather than hard exclusions.
+- Independent critic encoder, Huber value loss, optional value clipping,
+  `gamma=1`, longer GAE traces, PPO/KL clipping, and baseline regularization.
+- Potential shaping preserves undiscounted episode cost. Shortage and shed
+  penalties are not artificially increased.
+- Optional counterfactual rewards subtract a fixed controller's cost on the
+  identical scenario. This reduces exogenous reward variation without changing
+  the cost-minimizing policy; reference rollouts never enter observations.
+- CUDA policy batches when available; simulator workers remain CPU processes.
+- Nonzero training roots, independent exact validation, checkpoint-zero
+  validation, and atomic best/latest exports. Any validation fallback fails.
+- `history.csv` records losses, shortage/shed USD, RSS by harm level, and
+  fallback counts. Summaries explicitly report whether the target was reached.
 
-The deployment actor deliberately leaves chokepoint release overrides at their
-simulator default. The default release is a safe deterministic controller;
-learning mixed continuous/categorical override actions should only be added
-after a paired held-out comparison demonstrates an improvement.
+The initial queue-mode head chooses default release. The full-range action
+change requires retraining; old optimizer checkpoints cannot resume unchanged.
 
-## Commands
+## Training
 
-Install the training dependencies once:
+Install the existing training extra if needed: `uv sync --extra rl`.
+
+Optional public-observation planner warm-start:
 
 ```bash
-uv sync --extra rl
+uv run python agents/ppo/pretrain.py --task=small --episodes=128 --epochs=80 \
+  --validation_episodes=100 --device=auto --out=outputs/ppo/teacher
 ```
 
-Run a cheap wiring smoke test:
+The teacher dataset is written to `demonstrations.npz` under the run folder.
+Reuse it with `--dataset=<path>` and the same task/training entropy. Selection
+uses validation RSS, never teacher training loss alone.
+
+If imitation improves loss but hurts RSS, collect labels at learner states:
+pass `--behavior_policy=<candidate/policy.pt> --teacher_probability=0.5`
+and `--aggregate_dataset=<previous/demonstrations.npz>` with a fresh seed.
+These mixed trajectories reduce the mismatch between teacher and learner
+inventory states. The installed initializer remains a selection safeguard.
+
+Continue with PPO:
 
 ```bash
-uv run python agents/ppo/train.py --task=tiny --updates=1 --n_envs=1 \
+uv run python agents/ppo/train.py --task=small --updates=1000 --n_envs=8 \
+  --train_scenarios=256 --validation_episodes=100 --device=auto \
+  --initial_policy=outputs/ppo/teacher/best/policy.pt --patience=0 --install
+```
+
+Without a warm-start, omit `--initial_policy`. `--install` replaces local
+weights with the best validation checkpoint, including checkpoint zero.
+The local imitation experiments did not improve RSS, so the teacher warm-start
+remains experimental; direct PPO is the primary workflow. New runs use
+`--counterfactual_reward=True`; compatible resumes retain their original
+reward definition and do not silently reinterpret a saved cost critic.
+
+Early stopping is disabled by default. When enabled, `--patience` counts
+validation checks after `--min_updates` (default 200). The default target is
+`--target_rss=0.85`; three consecutive checks must meet it after the minimum
+budget before target stopping. Use an untouched root for final confirmation.
+
+Resume a compatible run, explicitly overriding patience if desired:
+
+```bash
+uv run python agents/ppo/train.py --resume=outputs/ppo/<run> \
+  --updates=1500 --patience=0 --install
+```
+
+Resume restores optimizer/RNG state and restarts simulator episodes; it is not
+an exact continuation of partially played episodes. Old optimizer schemas are
+rejected. `--migrate_only` saves a previous-weights backup under `outputs/ppo/`
+and creates a compatible initializer; start a new run afterward.
+
+The default scenario pool is 256, refreshed every 100 updates and populated
+once before workers start. `--scenario_cache` can reuse an existing cache;
+reference caches follow `SBF_CACHE_DIR`.
+
+Tiny wiring smoke (quick scores are not leaderboard evidence):
+
+```bash
+uv run python agents/ppo/train.py --task=tiny --updates=2 --n_envs=1 \
   --train_scenarios=2 --validation_episodes=1 --quick_validation
 ```
 
-Train the public-board network and install only the best held-out checkpoint:
-
-```bash
-uv run python agents/ppo/train.py --task=small --updates=300 --n_envs=8 \
-  --train_scenarios=4096 --validation_episodes=100 --device=auto --install
-```
-
-Resume to a new total update count; the original training settings are restored
-from `checkpoint.pt`:
-
-```bash
-uv run python agents/ppo/train.py --resume=outputs/ppo/<run> --updates=500 --install
-```
-
-For final confirmation only, add `--evaluate_dev`. Do not repeatedly tune from
-that result. Exact validation can be expensive because references include the
-clairvoyant solution; `--quick_validation` is only for smoke tests.
-
-The run folder contains `best/` and `latest/`, each a clean submission folder,
-plus `checkpoint.pt`, `history.csv`, `settings.json` and `summary.json`.
-
-Verify the installed agent without uploading anything:
+Verify CPU deployment without uploading:
 
 ```bash
 uv run sbf check ppo --task=small
+uv run sbf check ppo --task=full
 ```
 
-Because `train.py` is intentionally kept beside the agent, `sbf check ppo` may
-list its training-only imports as nonfatal warnings. The generated `best/`
-folder contains only `agent.py` and `policy.pt` and has no such warnings.
-
-For a robust final choice, run several seeds into separate run folders and use
-the same held-out validation root for all of them. Select by held-out RSS, then
-inspect root 0 only once after the choice is frozen.
+The agent folder also contains training scripts, so package checks may warn
+about their training-only imports. `agent.py` does not import them. Generated
+`best/` folders contain only runtime files. Root 0 is optional final reporting
+via `--evaluate_dev`, excluded from checkpoint selection.
