@@ -3,14 +3,18 @@
     uv run python examples/08_agent_losses.py --quick
     uv run python examples/08_agent_losses.py --task=small --episode=0 --quick
     uv run python examples/08_agent_losses.py --agent=template --episode=29 --quick
+    uv run python examples/08_agent_losses.py --agent=ppo --task=small --episode=0 --clairvoyant
 
 By default this plays the ``rl`` agent (a folder or a standalone ``rl.py``). It
 writes the standard episode dashboard and animation, plus
 ``losses_agent.png``: weekly and cumulative objective loss, excess loss against
 naive, and the cost-component breakdown. In ShockBench, loss means episode
 cost J (lower is better), not a supervised-learning loss.
+With ``--clairvoyant``, example 09 instead writes an offline three-plan report
+with the exact reference LP and same-state decision interventions.
 """
 
+import runpy
 import time
 from pathlib import Path
 
@@ -149,6 +153,8 @@ def main(
     regime: str = "standard",
     seed: int = 0,
     out: str | None = None,
+    clairvoyant: bool = False,
+    audit_weeks: int = 3,
 ) -> None:
     """Play an agent and write its standard and loss-focused dashboards.
 
@@ -164,9 +170,29 @@ def main(
         regime: information regime; standard is scored.
         seed: environment reset seed.
         out: output folder (default: outputs/08_agent_losses/<date_time>).
+        clairvoyant: write a three-plan dashboard with decision diagnostics (example 09).
+        audit_weeks: weeks to audit in clairvoyant comparison mode (zero skips).
 
     """
     agent = str(DEFAULT_AGENT if agent is None else agent)
+    if clairvoyant:
+        if not naive:
+            raise ValueError("clairvoyant comparison mode requires the naive baseline")
+        compare = runpy.run_path(str(Path(__file__).with_name("09_compare_plans.py")))["main"]
+        compare(
+            agent=agent,
+            task=task,
+            episode=episode,
+            search=search,
+            min_open=min_open,
+            quick=quick,
+            n_jobs=n_jobs,
+            regime=regime,
+            seed=seed,
+            audit_weeks=audit_weeks,
+            out=out,
+        )
+        return
     agent_class = load(agent)
     label = Path(agent).stem if Path(agent).suffix else Path(agent).name
     out = Path(out or f"outputs/08_agent_losses/{time.strftime('%Y-%m-%d_%H-%M-%S')}")

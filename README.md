@@ -171,6 +171,42 @@ fits only the network it was made on: use `--task=small` for one you will submit
 | [06_policy_search.py](examples/06_policy_search.py)     | an evolutionary search over an agent's numbers, and where an LLM proposer fits             |
 | [07_dashboard.py](examples/07_dashboard.py)             | the network map, episode dashboards and a GIF                                              |
 | [08_agent_losses.py](examples/08_agent_losses.py)       | an agent's weekly, cumulative and excess losses against the naive rule                     |
+| [09_compare_plans.py](examples/09_compare_plans.py)     | agent/naive/clairvoyant dashboards, detailed cost attribution and paired action interventions |
+
+Compare an agent with naive and the exact clairvoyant plan on the same scenario:
+
+```bash
+uv run python examples/09_compare_plans.py --agent=ppo --task=small --episode=0 --quick
+```
+
+Open the printed `index.html` in a browser. It contains all three standard
+episode dashboards, weekly/cumulative costs, searchable costs by node/edge,
+requested vs executed dispatches, and optimized production/energy/stock
+quantities. CSV, JSON and NPZ exports contain every row. `--animation` also
+writes three GIFs. `--quick` only makes the naive baseline rough; omit it for
+the scored naive rule. This is a single-scenario diagnosis, not pooled RSS.
+
+Decision audits test a changed action from the same weekly state, then let the
+original agent react through the remaining episode. Savings include delayed
+shortage/shedding and terminal credit; no-change replay controls must match
+exactly. Default: three high-cost-gap weeks and two candidate routes per week.
+Route candidates exclude publicly known empty sources and masked routes;
+alternatives include naive quantities, smaller/larger requests and queue modes.
+The report distinguishes actual execution changes from requests that only
+affect later decisions through feedback.
+Use `--audit_start=1 --audit_weeks=8` to inspect earlier decisions, or
+`--audit_weeks=0` for dashboards only. More audit weeks mean more rollouts.
+These limited alternatives are not exhaustive and their savings are not additive.
+The clairvoyant reference is an LP, not an executable submission: it can choose
+production/energy variables unavailable as agent actions. A difference from its
+flows alone is not proof of a mistake. Only the paired intervention establishes
+whether a particular tested alternative would have reduced simulated costs.
+
+The existing losses script also supports this mode:
+
+```bash
+uv run python examples/08_agent_losses.py --agent=ppo --task=small --episode=0 --quick --clairvoyant
+```
 
 ```bash
 python examples/03_heuristic_agent.py --task=small --episodes=6
@@ -204,7 +240,7 @@ It is your fork: change anything.
 
 ```
 agents/            one folder per agent: template (send the maximum), random, heuristic, and yours
-examples/          01_quickstart.py ... 08_agent_losses.py, and ppo_agent.py (the PPO submission's agent.py)
+examples/          01_quickstart.py ... 09_compare_plans.py, and ppo_agent.py (the PPO submission's agent.py)
 src/sbf_starter/   the `sbf` command line
 docs/              GUIDE.md (interface, rules, scoring) and fields/ (every observation and action field)
 scripts/           fields_docs.py: regenerates docs/fields/ after a new shockbench-flow release

@@ -611,3 +611,437 @@ nonfatal warnings for training-only imports because the requested trainer is
 kept inside the agent folder; generated `best/` folders contain only
 `agent.py` and `policy.pt`. No pytest command or file under `tests/` was run.
 Nothing was uploaded to Codabench or published to PyPI.
+
+## 17. PPO action, memory, distress, and queue-control revision (2026-10-06)
+
+### Diagnosis and preserved baseline
+
+I read the actual Small run under `outputs/ppo/2026-10-05_17-46-51/`.
+It requested 300 updates but stopped at update 40 because the best checkpoint
+was update 10 and patience was 30 updates. It played 320 complete episodes,
+16,640 weekly transitions. RSS moved from 0.5581887 at update 1 to 0.5583070
+at update 10, then fell to 0.5555537. SHA-256 checks confirmed that the installed
+weights were the best checkpoint. The training device had resolved to CPU.
+
+The logit residual was a stronger restriction than intended: its correction
+was limited to +/-2. A baseline-zero route could reach only 0.0007384 of capacity;
+a baseline-full route could fall only to 0.9992616. In one Small observation,
+38 of 78 active routes had less than one percentage point of possible movement.
+I preserved the old agent and weights at `outputs/ppo/pre_v2/`, and migration
+also keeps a previous-weights backup under `outputs/ppo/migration_backup/`.
+
+### Action and observation changes
+
+I replaced the logit window with `clip(base + tanh(latent), 0, 1)` in both
+training and deployment. Zero means the exact baseline; large positive/negative
+latents can now move zero/full routes across the capacity range. A direct
+NumPy/Torch parity check confirmed endpoint movement and a masked route stayed
+zero. Closure and nominal deadline restrictions became baseline preferences
+and observed features rather than removing legal actions from exploration.
+Known prohibitions and zero first-edge capacity remain projected out.
+
+The new inputs add route/commodity/destination identity, destination stock,
+inbound shipments and WIP, forecasts/backlog/shortage at reachable sinks,
+shedding at reachable grids, source availability, factory capacity/power,
+storage pressure, and clipping losses. Reachability follows both transport
+and production transformations. Separate shortage and shed signals replace
+reliance on a single global distress multiplier. `distress_gain` belongs to
+the older compact RL controller; PPO learns its response through these inputs.
+Mask confidence now reads `action_mask.observed` rather than testing whether
+the mask's numeric value is nonnegative. Deployment explicitly applies both
+dispatch and override masks. Masks are inputs, not action return fields.
+
+### Recurrent optimization and stopping
+
+The trainer now uses contiguous sequence minibatches, recent-memory burn-in,
+backpropagation across weeks, and hidden-state resets at episode boundaries.
+A three-week gradient diagnostic confirmed nonzero gradient from the final
+decision into the first week's input. The critic has an independent encoder;
+Huber loss and disabled-by-default value clipping reduce sensitivity to large
+episode costs. Gamma remains 1 and GAE lambda becomes 0.99. Optional potential
+shaping preserves the undiscounted cost objective up to the fixed initial-state
+potential; no arbitrary shortage/shed penalty multipliers were introduced.
+
+Patience is disabled by default, counts validation checks when enabled, and
+cannot stop before the minimum update budget. Explicit patience overrides work
+on resume: a Tiny resume check successfully changed it to 7. Checkpoint zero
+is validated before optimization and retained if trained checkpoints are worse.
+The target defaults to 0.85 RSS, requires repeated successful checks, and is
+reported as met/unmet rather than asserted. Resume rejects incompatible old
+optimizer schemas, restores compatible optimizer/RNG state, and restarts
+simulator episodes. Completed episode counters persist in new checkpoints.
+
+Training history includes shortage/shed USD, RSS by harm stratum, fallback
+counts, anchor loss, and stale validation-check counts. Old CSV headers are
+migrated when needed. Validation fallback is an error. Scenario pools default
+to 256, refresh every 100 updates, and populate once in the parent before
+workers start, avoiding duplicate generation and many unused cached scenarios.
+
+### Queue control and optional teacher initialization
+
+A paired single-scenario planner diagnostic cost $3.170970 trillion when only
+its dispatch flows were played, versus $2.681561 trillion with its queue
+overrides. This motivated adding shared neural features for override routes,
+learned release quantities, and categorical default/override/hold decisions.
+The evaluator returns all three valid action fields and includes observed
+shipments arriving this week when determining release availability. PPO uses
+joint Gaussian-latent and categorical likelihoods; override latent likelihoods
+are included only when override mode is selected. The initializer chooses
+default release. These changes are the v3 feature/action/checkpoint schema.
+
+I added `agents/ppo/pretrain.py`, which collects demonstrations from `mpc_det`
+on non-dev roots using only public standard observations. No omega or future
+disruption payload is passed to the teacher. Solver dependencies stay in
+training; deployment remains NumPy/Torch inference. It saves datasets, fits
+full episode sequences, and selects by exact held-out RSS. Dataset reuse and
+aggregation are supported. A first 32-scenario/40-epoch experiment reduced
+imitation loss from 9.3927 to 0.4861 but hurt RSS, so its initializer (0.5583411)
+was retained. These failed candidates were not installed.
+
+The planner itself scored 0.6980455 on a 20-scenario held-out diagnostic
+(RSS by harm level: 0.6856961, 0.6730946, 0.8136731, 0.6160403). This is a
+diagnostic, not independent final evidence or a promised 0.8-0.9 result.
+To address imitation distribution shift, I added collection on mixed
+learner/teacher trajectories with teacher labels at the learner's states,
+dataset aggregation, and a quantity-space imitation loss instead of giving
+extreme inverse-tanh targets disproportionate weight. A second experiment
+uses 16 mixed trajectories plus the original 32 demonstrations. A separate
+100-update Small PPO experiment starts from the retained initializer.
+
+### Verification and environment limitations
+
+Tiny full-horizon optimizer/export and resume smoke runs completed without
+pytest. Small v3 deployment completed all weeks with no fallback, maximum CPU
+time about 0.050 seconds; Full completed with no fallback, maximum about
+0.114 seconds. Both are below their 2/4-second limits. Ruff passed. Training
+scripts in the agent folder produce nonfatal training-import warnings; clean
+export folders contain only runtime files.
+
+`nvidia-smi` could not communicate with the NVIDIA driver; Torch also selected
+CPU. CUDA code remains available, but no local CUDA speedup was demonstrated.
+The sandbox blocked the multiprocessing forkserver socket for the eight-worker
+PPO experiment. I requested and received execution approval, then relaunched
+that local training outside the sandbox. References were copied to a writable
+temporary cache and existing scenarios reused without modifying the original
+cache. An earlier v2 experiment was interrupted before optimization to add
+the missing queue-control action space; no trained checkpoint was lost.
+
+No pytest command, script under `tests/`, Codabench mock, upload, or PyPI
+publication was performed. Follow-up measured results are recorded below.
+
+### Follow-up training and implementation outcomes
+
+The mixed-trajectory imitation experiment completed all 30 epochs. Training
+loss fell from 7.4839 to approximately 0.3110, but exact validation RSS was
+worse than the initial 0.5583411. Selection kept epoch zero and this candidate
+was not installed. Lower imitation loss was not evidence of a better control
+policy in either experiment. The optional teacher script remains experimental,
+not a claimed route to the requested score.
+
+The main Small PPO run completed all 100 requested updates rather than stopping
+at 40: 41,600 weekly transitions and 800 complete training episodes using eight
+CPU simulator workers and a 256-scenario training pool. It used training root
+1503053992 and exact 100-episode validation root 20261006, with no quick scoring
+or dev-root selection. Best validation RSS progressed from 0.5583411 at update
+zero to 0.5588967 at update 1, 0.5602212 at update 20, and 0.5606087 at update
+40. Later checkpoints did not improve the best. The trainer installed update
+40; matching SHA-256 hashes confirmed that `agents/ppo/policy.pt` is the exported
+best checkpoint. `outputs/ppo/v3_small/summary.json` explicitly records
+`target_met: false`. The 0.8-0.9 target has **not** been achieved.
+
+I changed validation routing to use batched inference when CUDA is available
+or evaluation uses one worker, and CPU process-parallel evaluation otherwise.
+This keeps the CUDA batch path while avoiding serial CPU feature extraction
+when parallel workers are requested. A Tiny batched-validation smoke completed.
+Training imports now set a feature-only flag before importing the deployment
+module. This avoids loading a checkpoint or initializing CUDA in simulator
+workers that need only feature construction; normal evaluation still loads
+weights once at module scope. A Tiny teacher smoke verified this import path.
+
+I added an optional, default-on counterfactual reward for **new** runs: subtract
+the weekly reward of a fixed nominal/reserve/closure-aware controller played
+on the identical scenario. The resulting episode objective is the reference
+cost minus policy cost, preserving the cost-minimizing optimum while removing
+an action-independent source of variation. The reference uses default queue
+release, and its trajectory never enters the learner's observations. The
+reference is cached per scenario inside each simulator worker.
+
+Two direct Tiny diagnostics checked the reward accounting: following that
+same controller gave exactly zero relative episode reward; a zero-dispatch
+policy gave -15.98322314607343, matching the scaled cost difference to floating
+point precision. A two-update Small smoke and resume to update three completed
+with the new reward path and persisted episode counters. These are wiring and
+objective-accounting checks, not evidence of an RSS improvement. The 100-update
+run had already started with the original dense cost rewards; compatible
+resumes retain their saved reward definition. A new relative-reward run resets
+the cost critic while retaining the actor, rather than silently reusing a
+critic trained on a different target.
+
+Finally, minibatch permutation uses a local seeded NumPy generator and saves
+its state in new checkpoints. The patience baseline is tracked separately
+from the absolute best checkpoint, so cumulative small improvements can reset
+patience once they exceed `min_delta`. These changes received optimizer/resume
+smoke coverage; older compatible checkpoints retain legacy RNG support.
+
+The installed trained weights passed fresh isolated CPU checks: all 52 Small
+weeks, median act 0.0214 s and maximum 0.054 s versus the 2 s limit; all 104 Full
+weeks, median 0.0663 s and maximum 0.132 s versus the 4 s limit. Neither used
+fallback. These are local runtime checks, not claims of Full score quality.
+The expected training-only-import warnings remain nonfatal; clean exported
+agent folders contain only the permitted runtime module and weights. No upload
+was performed despite the check command printing an upload suggestion.
+
+For independent confirmation I froze the installed checkpoint and started a
+paired comparison against the preserved old PPO on 100 fresh scenarios,
+root 20261008. This root was not used for checkpoint selection. The old agent
+alone scored 0.5627375 there (90% interval 0.5332728-0.5919509, zero fallback).
+The paired comparison result is recorded below when complete.
+
+### Independent confirmation and final handoff
+
+The exact paired 100-scenario confirmation completed successfully. The new
+PPO scored 0.5657928153 and the preserved old PPO scored 0.5627375484. Their
+difference was +0.0030552669, with a paired 90% resampling interval
+[0.0023415494, 0.0037934002]. This interval excludes zero: the measured gain is
+small but detectable on these scenarios. The new agent's absolute 90% RSS
+interval was [0.5362950015, 0.5951166821]. Mean cost decreased from approximately
+$2.767628 trillion to $2.764215 trillion, a saving of about $3.413403 billion
+per episode. Both agents had zero fallback weeks. Results are saved in
+`outputs/ppo/confirmation_comparison.json`.
+
+The commands used were the direct training and CLI workflows, never pytest:
+
+```bash
+uv run python agents/ppo/train.py --task=small --updates=100 --n_envs=8 \
+  --train_scenarios=256 --entropy=1503053992 --refresh_every=0 \
+  --scenario_cache=/home/kofful/.cache/shockbench-flow \
+  --validation_episodes=100 --validation_jobs=4 --eval_every=20 \
+  --out=outputs/ppo/v3_small --install
+uv run sbf compare ppo outputs/ppo/pre_v2 --task=small --episodes=100 \
+  --entropy=20261008 --device=cpu --batch_size=1 --n_jobs=4 \
+  --out=outputs/ppo/confirmation_comparison.json
+uv run sbf check ppo --task=small
+uv run sbf check ppo --task=full
+```
+
+Actual invocations used `SBF_CACHE_DIR=/tmp/sbf-ppo-cache`, a writable uv cache
+and `--no-sync` to avoid changing the locked dependencies. The training command
+above records the experiment's arguments; the current trainer additionally
+defaults to relative rewards, so reproducing this original reward run requires
+`--counterfactual_reward=False`. I did not start a longer experiment after the
+participant chose “Finish this run and report the measured results.”
+
+Final Ruff lint/format checks and `git diff --check` passed. The unrelated
+`dotvenv.zip` was left untouched. All modifications are local, the installed
+weights are the selected trained checkpoint, and no tests under `tests/`,
+pytest, Codabench mock/upload, or PyPI publication/update was performed. The
+reported outcome is a working revised PPO with a small confirmed RSS gain;
+the requested 0.8-0.9 performance remains unmet.
+
+## 18. Clairvoyant comparison dashboards and decision diagnostics (2026-10-06)
+
+### Request and investigation
+
+The participant requested the same episode dashboards for the clairvoyant
+reference, comparisons against their agent and naive, and more detail about
+decisions that caused extra costs. I inspected examples 07/08, the installed
+dashboard recorder, the Gym/core environment snapshot APIs, the reference LP,
+its replay verifier and weekly cost formation. No pytest or files in `tests/`
+were run. No Codabench mock, upload, PyPI publication, dependency upgrade or
+training run was performed. Existing PPO weights and training changes were
+left intact during this dashboard task; `dotvenv.zip` was untouched.
+
+The important finding is that clairvoyant is a full-horizon optimization LP,
+not a submission Agent whose actions can reproduce the reference cost. The LP
+can choose production, energy allocation, service and other auxiliaries in
+addition to dispatches. Ordinary agents get only shipping and queue controls,
+with production/allocation performed by simulator rules. Merely feeding the
+LP's dispatch vector to the simulator would produce a different trajectory and
+must not be labeled the scored clairvoyant plan.
+
+### Implementation and accounting
+
+Added `examples/09_compare_plans.py`, following the existing Fire keyword-flag
+pattern. It supports any agent name/folder/agent.py, all task sizes, a scenario
+root/index, information regime, reset/policy seeds, exact or quick naive,
+audit-week selection, candidate-route count, optional GIFs and output path.
+Outputs normally live under `outputs/09_compare_plans/<date_time>/`.
+
+Added training/local-analysis-only `src/sbf_starter/diagnostics.py`. The tool:
+
+1. Resolves one explicit scenario and uses its identical omega for the agent,
+   prediction-free naive, and optimized reference. It records the scenario hash
+   and seeds so the comparison can be reproduced.
+2. Solves the original reference LP with the benchmark's oracle solver and
+   refuses to label a nonoptimal result clairvoyant. `--quick` changes only the
+   naive quantile replication count (2 instead of 1,000), never the LP solve.
+3. Records complete agent/naive simulator trajectories with the existing episode
+   recorder. The official LP replay checks must find each trajectory feasible
+   and its simulator/LP accounting equal. Invalid/fallback actions are rejected
+   before causal diagnostics rather than silently attributed to the agent.
+4. Projects the actual optimized stock, dispatch, backlog, service, shedding,
+   weekly component costs and terminal credit into the existing dashboard
+   format. The record is explicitly labeled `clairvoyant_lp_projection`, not
+   an agent replay, and its action arrays are explicitly non-executable.
+   Exogenous map/warning signals use the same information view as the agent.
+   LP lot identities, pipeline and WIP are unavailable and masked rather than
+   copying the agent's unrelated state. Optimized queue totals appear in the
+   full quantity export, not in the plain-stock heatmap.
+5. Writes three standard dashboards and records, `comparison.png`,
+   `cost_attribution.csv`, `route_decisions.csv`, `quantity_comparison.csv`,
+   `lp_vectors.npz`, `summary.json`, `decision_audit.json`, and an offline,
+   self-contained `index.html`. `--animation` adds three GIFs.
+6. Decomposes all eight weekly cost components into actual edge/node LP terms
+   for agent, naive and clairvoyant, preserving the official lane aggregation.
+   Each component must reconcile to its recorded weekly cost. Terminal credit
+   is reported separately. The route table includes zero/blocked routes,
+   requested/executed/clipped quantities, optimized quantities, source stock,
+   destinations, transit times, observed prohibitions/open fractions and the
+   realized (hindsight) route state. Observed unknowns remain unknown.
+
+The offline HTML includes side-by-side dashboards, cumulative/weekly costs,
+component comparisons, a week/entity search, sortable tables, readable action
+interventions and every raw-data download. It needs neither a web server nor
+an external JavaScript service. Large tables render the first 600 filtered
+matches for responsiveness; CSVs contain all rows. Embedded JSON escapes `<`
+and text is inserted with `textContent` rather than treating agent labels as
+HTML. Headless Chrome successfully rendered the Small dashboard; its initial
+sandbox socket restriction required approved execution outside the sandbox.
+The layout was inspected in a browser screenshot and the comparison PNG.
+
+### Same-state causal interventions
+
+Weekly cost gaps and different optimal flows are descriptive, not proof that
+the current week's shipping decision was wrong. Inventories already differ,
+optimal plans may not be unique, and shipping affects later weeks. To measure
+a tested alternative, the audit rebuilds the original agent's complete prefix
+and recurrent memory, snapshots its same pre-action simulator state, changes
+only one week's action, then lets a copied original agent react through the
+remaining episode. No future scenario information is passed to the actor.
+
+Alternatives include naive's whole action recomputed at the agent's state,
+individual naive quantities, a 25% smaller request, a request increased by
+25% of nominal capacity, and default/held queue releases. Naive keeps its
+initial reset-time plan; it is not copied from naive's separate trajectory.
+Candidate routes exclude publicly known empty sources and observed masked
+routes; unknown supply is not treated as zero. Default week selection ranks
+net weekly hindsight cost gaps, and explicit `--audit_start` supports earlier
+decisions. Selection is diagnostic hindsight and can miss causes outside the
+selected weeks; it is not a deployable policy or an exhaustive action search.
+
+For every audited week, an unchanged-action control must reproduce the final
+cost in exact integer cents. All prefix actions are also checked against the
+record. Failed deterministic replay/deepcopy is reported as an audit error,
+not used to claim savings. A safe audit failure preserves accounting outputs
+and reports failure rather than presenting an empty audit as successful.
+
+Each result contains net episode savings, immediate savings, the first week
+with a cost effect, a per-week savings trace, all cost-component savings,
+terminal-credit change, exact old/new requests and executions, and changed
+queue modes/overrides. Component savings plus credit must reconcile to total
+savings within rounding tolerance. Different interventions' savings are not
+additive. The report explicitly distinguishes requests with unchanged current
+execution from physical dispatch changes: a changed request can alter later
+PPO behavior through observation feedback without delivering extra cargo now.
+
+### Corrections found during smoke runs
+
+The first Tiny smoke exposed that internal stock slots include chokepoints,
+but the dashboard's `stock.qty` contains only plain stocks. I corrected all
+stock indexing through the flat layout's `(node, commodity)` positions and
+kept optimized queues in the quantity export. A subsequent smoke showed that
+step info does not repeat reset's `static`; the naive policy is now reset
+once at the original initial state before replaying the prefix. I also used
+the actual schema's edge `tau` (not `tau0`) and the scalar
+`action_mask.observed[0]` (not a per-route observed array). Intervention
+branches use the public core snapshot/restore and action/observation conversion
+APIs, without changing the Gym adapter's private week cursor.
+
+### Measured Small results and useful decision example
+
+The exact-naive comparison on Small, dev episode 0, root 0, policy seed 0:
+
+- PPO J: $3,539,512,276,730.44.
+- Naive J: $3,935,505,276,240.43 (1,000 quantile replications).
+- Clairvoyant LP J: $3,152,354,959,380.31; optimal status 0, highs-ipm.
+- Single-scenario gap recovery: 0.5056411151. This is diagnostic only, not
+  the leaderboard's harm-stratified/pooled RSS or a multi-scenario estimate.
+- Extra PPO shortage cost against clairvoyant: $337,632,507,026.35.
+- Extra PPO shedding cost against clairvoyant: $38,271,248,498.04.
+  Other components and the terminal-credit difference complete the net gap.
+
+The first three-high-gap-week quick audit (43, 44, 52) completed in about 14
+seconds after model construction. Each no-change control saved exactly $0.
+It found a week-52 whole-naive-action alternative saving $1,780,386.88; these
+late-week results alone did not explain the much larger total opportunity gap.
+
+I therefore also audited earlier weeks 17-22 against exact naive, initially
+with four candidate routes: 90 total rollouts including controls, about 74
+seconds after model construction. This exposed several request-only feedback
+effects. I refined candidate selection to skip known empty sources and added
+an explicit feedback-only explanation to the report.
+
+The final earlier-week run, weeks 17-19 with three candidate routes, completed
+36 paired intervention rollouts in about 35 seconds after model construction.
+All three controls reproduced the original cost exactly. Its largest tested
+improvement was week 17, slot 83, `sea.ct.osat_my.chk_taiwan`, mature chips
+(`chip_mat`, lane 17): replacing PPO's request 36,256.139 with naive's
+same-state request 175,554.429 increased actual execution from 977.965 to
+1,621.102. Net episode savings were $6,409,361.58. Immediate saving was $0;
+the first cost effect was week 18, with the large shortage benefit in week 19.
+Shortage savings were $6,601,717.24, offset by additional transport/tariff and
+other costs and a $3,686.66 reduction in terminal credit. This is a real
+executed-dispatch change, not a request-only feedback effect. Other tested
+week-19 and week-18 naive quantity substitutions saved about $5.64M and
+$4.45M individually; these savings cannot be added or assumed to generalize.
+
+Final report: `outputs/09_compare_plans/ppo_small_episode0_early/index.html`.
+The larger earlier exploratory audit is preserved in
+`outputs/09_compare_plans/ppo_small_episode0_exact/`; the initial quick view is
+in `outputs/09_compare_plans/ppo_small_episode0/`. No PPO weights were changed
+and no claimed achievement of the earlier 0.8-0.9 target follows from this
+single-scenario diagnostic.
+
+### Compatibility and verification
+
+Added opt-in `--clairvoyant` / `--audit_weeks` to example 08, delegating to
+example 09; its original loss-dashboard path remains unchanged. Updated the
+README with usage, exports, replay semantics and limitations.
+
+Executed local script checks, not pytest:
+
+```bash
+uv run --no-sync python examples/09_compare_plans.py --agent=template \
+  --task=tiny --episode=0 --quick --audit_weeks=1 --route_candidates=1 \
+  --out=outputs/09_compare_plans/tiny_smoke
+uv run --no-sync python examples/09_compare_plans.py --agent=ppo \
+  --task=small --episode=0 --audit_start=17 --audit_weeks=3 \
+  --route_candidates=3 --out=outputs/09_compare_plans/ppo_small_episode0_early
+uv run --no-sync python examples/09_compare_plans.py --agent=ppo \
+  --task=full --entropy=20261009 --episode=0 --quick --audit_weeks=0 \
+  --out=outputs/09_compare_plans/full_smoke
+uv run --no-sync python examples/09_compare_plans.py --agent=random \
+  --task=tiny --episode=29 --policy_seed=7 --quick --audit_start=5 \
+  --audit_weeks=1 --route_candidates=1 --animation \
+  --out=outputs/09_compare_plans/random_animation_smoke
+uv run --no-sync python examples/08_agent_losses.py --agent=template \
+  --task=tiny --episode=0 --quick --clairvoyant --audit_weeks=0 --n_jobs=1 \
+  --out=outputs/09_compare_plans/wrapper_smoke
+uv run --no-sync python examples/08_agent_losses.py --agent=template \
+  --task=tiny --episode=0 --nonaive --n_jobs=1 \
+  --out=outputs/09_compare_plans/legacy_losses_smoke
+```
+
+Actual commands used writable caches: `SBF_CACHE_DIR=/tmp/sbf-ppo-cache`,
+`UV_CACHE_DIR=/tmp/sbf-uv-cache`, `MPLCONFIGDIR=/tmp/sbf-matplotlib`. The seeded
+random-agent smoke passed its replay control and wrote all three GIFs. The
+Full smoke passed reference replay and component reconciliation on its
+104-week/large-network dimensions; its costs were PPO $5.923T, quick naive
+$6.504T and optimal clairvoyant $4.743T (about 17.5 seconds for the LP solve).
+These are smoke/one-scenario results, not Full leaderboard performance claims.
+
+Additional direct checks verified all three matched scenario hashes, exact
+cent net totals, every component attribution, zero unchanged-control savings,
+masked unavailable LP fields, embedded HTML data and every report artifact
+link. Ruff lint/format and `git diff --check` passed on the new/modified
+dashboard code. No files in `tests/` were run, and all changes remain local.
