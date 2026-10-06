@@ -545,3 +545,69 @@ make lint
    hold actions is a possible future improvement.
 6. More independent training roots and an exact Full comparison would provide
    stronger evidence for private-board transfer.
+
+## 16. Recurrent PPO agent and separate trainer
+
+I added `agents/ppo/` as a second, neural RL implementation. It contains
+`agent.py`, `train.py`, `policy.pt`, and a focused `README.md`. Training and
+evaluation are separated: `train.py` owns Gymnasium, Stable-Baselines3's vector
+environment helpers, optimization, scoring, checkpointing, and export;
+`agent.py` imports only the standard library, NumPy, and Torch. At module load,
+the evaluator loads the TorchScript checkpoint once. During an episode it only
+extracts features, performs deterministic inference, updates recurrent state,
+and returns flows.
+
+The original PPO example discarded the padded dynamic state and used a flat,
+memoryless, task-specific MLP. The new feature builder instead creates one
+fixed-width record per route. It aggregates stock, inbound pipeline, WIP,
+queued cargo, current capacities, costs, tariffs, transit times, prohibitions,
+chokepoint state, early warnings, pending prohibitions, announced reopening,
+last requested and executed flow, forecast demand, shortage, shed power, and
+observation confidence. The input contains the current record, previous week's
+record, and their difference. A GRU adds longer episode memory. The encoder is
+shared across routes and pools route embeddings for network-wide context, so
+the same architecture accepts Tiny, Small, and Full shapes.
+
+The actor is residual rather than absolute. The zero-residual checkpoint
+reproduces the tuned `agents/rl` controller. PPO applies bounded corrections
+in logit space, while deterministic projection removes known illegal, closed,
+zero-capacity, and too-late dispatches. This makes exploration start from a
+working controller rather than destructive random flows. The committed
+`policy.pt` is this safe initializer; a long training run replaces it only
+when `--install` is explicitly passed.
+
+The trainer implements finite-horizon PPO with `gamma=1` by default, GAE,
+policy and value clipping, entropy regularization, gradient clipping,
+target-KL stopping, learning-rate annealing, parallel simulator processes, and
+CUDA-batched neural updates when CUDA is available. It rotates deterministic
+nonzero training roots during long runs. Model selection uses exact RSS on a
+fixed, distinct, nonzero validation root. Root 0 is excluded from training and
+selection and is evaluated only when the user explicitly passes
+`--evaluate_dev`. Every run records settings and optimization losses, exports
+`latest/` and `best/` clean agent folders, writes an atomic resumable
+`checkpoint.pt`, and supports early stopping. Resume restores the original run
+settings and accepts a new total update count.
+
+Tiny exposes queue lots as padded records, while Small and Full expose a dense
+lot-key-by-week matrix. The first Small server-style check revealed that schema
+difference. I added both aggregation paths and repeated the check. The final
+Small check completed all 52 weeks with no fallback, a median action time of
+about 0.0069 seconds, and a maximum of about 0.036 seconds against the 2-second
+budget. The Full check completed all 104 weeks with no fallback, a median of
+about 0.0242 seconds, and a maximum of about 0.073 seconds against the 4-second
+budget.
+
+I exercised three training paths directly without pytest or the `tests/`
+folder: a four-week optimizer/export smoke, a complete 26-week Tiny rollout,
+and a two-update scenario-refresh run followed by resume to update three. The
+complete rollout recorded an episode return, PPO losses, exact quick held-out
+RSS, a best agent, a checkpoint, history, and summary. A paired four-scenario
+Small quick comparison showed the initialized PPO and `agents/rl` at the same
+displayed RSS (`0.5375`, difference `-0.0000`), confirming the intended safe
+initialization. Quick scores are only wiring checks, not leaderboard evidence.
+
+Static checks passed for both new Python files. `sbf check ppo` reports
+nonfatal warnings for training-only imports because the requested trainer is
+kept inside the agent folder; generated `best/` folders contain only
+`agent.py` and `policy.pt`. No pytest command or file under `tests/` was run.
+Nothing was uploaded to Codabench or published to PyPI.
