@@ -27,6 +27,7 @@ from shockbench_flow_agent.local_eval import NO_ZIP_SHA256
 from shockbench_flow_agent.scoring import _play
 
 from sbf_starter import ROOT, scoring
+from sbf_starter.tracking import Tracker
 
 
 AGENT = ROOT / "agents" / "mpc_residual"
@@ -85,6 +86,7 @@ def main(
         write: write the winner to agents/mpc_residual/params.json.
         out: the run folder (default: outputs/train_residual/<date_time>).
     """
+    params = dict(locals())
     if entropy in (0, holdout_entropy):
         raise ValueError("train on a root of your own, neither the dev root 0 nor the held-out root")
     groups = _groups()
@@ -95,6 +97,7 @@ def main(
     if start:
         mean = np.asarray(json.loads(Path(start).read_text())["theta"], dtype=float)
     train = scoring.episode_set(task, train_episodes, entropy=entropy, n_jobs=n_jobs)
+    tracker = Tracker("mpc_residual", run.name, params | {"run_folder": run})
     weights = np.log(elite + 0.5) - np.log(np.arange(1, elite + 1))
     weights /= weights.sum()
     log, best = [], (-np.inf, mean.copy())
@@ -144,6 +147,10 @@ def main(
                     "mean_theta": mean.round(4).tolist(),
                 }
             )
+            tracker.log(
+                {"mean_score": scores[0], "best_score": scores[order[0]], "best_so_far": best[0], "sigma": sigma},
+                step=g,
+            )
             print(
                 f"generation {g}: mean's score {scores[0]:.4f}, best {scores[order[0]]:.4f}, "
                 f"best so far {best[0]:.4f}, sigma {sigma:.3f} ({time.perf_counter() - start_g:.0f} s)",
@@ -165,6 +172,10 @@ def main(
         )
         print(f"\nheld out, {holdout_episodes} episodes of root {holdout_entropy}:\n{cmp}")
         (run / "holdout.txt").write_text(str(cmp))
+        tracker.log({f"holdout_{task}_minus_mpc": cmp.diff}, step=generations)
+        for name in ("best.json", "holdout.txt"):
+            tracker.artifact(run / name)
+        tracker.end()
         if write and cmp.diff is not None and cmp.diff > 0:
             (AGENT / "params.json").write_text(json.dumps({"theta": best[1].round(6).tolist()}, indent=1))
             print(f"written agents/mpc_residual/params.json; next: uv run sbf check mpc_residual --task={task}")

@@ -1,0 +1,1 @@
+Copied from shockbench_flow-0.1.2 by scripts/vendor_mpc.py (36 modules, renamed shockbench_flow -> sbflow, patched: __init__.py, instance/io.py, parallel.py, policies/lp_common.py). Do not edit: rerun the script.

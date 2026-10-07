@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENTS = ("mpc", "mpc_residual")  # every agent folder that imports sbflow gets its own copy
+AGENTS = ("mpc", "mpc_residual", "mpc_adaptive", "mpc_ppo", "mpc_route")  # every agent folder that imports sbflow gets its own copy
 DEST = ROOT / "agents" / AGENTS[0] / "sbflow"
 NAME = "sbflow"
 

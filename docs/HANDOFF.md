@@ -10,7 +10,7 @@
 | `template` (шле максимум) | 0.409 | точка відліку |
 | `rl` (Владислав, гілка `origin/cuda`) | 0.528 | |
 | **`mpc`** (наш) | **0.727** | готовий до завантаження: `sbf check` проходить на Small (≤ 0.18 с/тиждень) і Full (≤ 0.78 с) |
-| `mpc_residual` (наш) | = `mpc`, поки без `params.json` | тренується |
+| `mpc_residual` (наш) | ще не міряли на dev | натреновано: на 9001 × 64 +0.018 [+0.014, +0.023] до `mpc`; `sbf check` Small проходить; Full ще не перевірено |
 
 Нічого ще не завантажено на Codabench.
 
@@ -37,6 +37,11 @@
 | --- | --- |
 | `agents/mpc/agent.py` | MPC-агент для сервера |
 | `agents/mpc_residual/agent.py` | MPC + 12 поправок з `params.json` |
+| `agents/mpc_adaptive/agent.py` | MPC + поправки, що щотижня залежать від стану гри (варіант А, PLAN.md Фаза 4В) |
+| `examples/train_adaptive.py` | тренування `mpc_adaptive` (OpenAI-ES, root 1002, перевірка на 9001) |
+| `agents/mpc_ppo/agent.py`, `examples/train_ppo_residual.py` | MPC + поправки від нейронки, тренування PPO на Small і Full (PLAN.md Фаза 4В) |
+| `agents/mpc_route/agent.py`, `examples/train_route.py` | MPC + поправка для кожного маршруту від спільної мережі, ES на Small і Full (варіант Б) |
+| `examples/watch_training.py`, `src/sbf_starter/tracking.py` | живий графік тренування; запис у MLflow (`outputs/mlflow.db`) |
 | `agents/*/sbflow/` | скопійований пакет організаторів — **не редагувати**, генерує `scripts/vendor_mpc.py` |
 | `scripts/vendor_mpc.py` | копіює пакет у обидва агенти (перезапустити після оновлення shockbench-flow) |
 | `examples/train_residual.py` | тренування `mpc_residual` (еволюційна стратегія; root 1001, перевірка на 9001) |
