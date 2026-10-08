@@ -6,8 +6,10 @@
 
 Any trainer can be shown: its run folder needs a ``log.json``, a list of rows, one per report, each with
 ``"minutes"`` and, per map it plays, ``{"rss": its score on the last episodes, "minus_mpc": that minus plain MPC's
-score on the same episodes}`` (examples/train_ppo_residual.py writes it). Top row: the scores (solid: the run,
-dashed: MPC on the same episodes); bottom row: the run minus MPC, above 0 when the run beats MPC.
+score on the same episodes}`` (examples/train_ppo_residual.py writes it), and optionally ``"holdout_<map>"`` and
+``"holdout_<map>_minus_mpc"`` (examples/gpu_ppo.py: the deterministic policy on held-out episodes, drawn as dots). Top
+row: the scores (solid: the run, dashed: MPC on the same episodes); bottom row: the run minus MPC, above 0 when the
+run beats MPC.
 """
 
 import json
@@ -20,8 +22,19 @@ from sbf_starter import ROOT
 
 
 MAPS = ("small", "full")
-COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948")  # in this order
-INK, INK2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e0", "#fcfcfb"
+THEMES = {  # series colours in this order, then text, secondary text, grid, background
+    "light": (
+        ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"),
+        ("#0b0b0b", "#52514e", "#e6e5e0", "#fcfcfb"),
+    ),
+    "dark": (
+        ("#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"),
+        ("#ffffff", "#c3c2b7", "#33332f", "#1a1a19"),
+    ),
+}
+COLORS, (INK, INK2, GRID, SURFACE) = THEMES["dark"]
+HELD_OUT = {"light": "#e34948", "dark": "#e66767"}  # red: the held-out evaluation
+RED = HELD_OUT["dark"]
 
 
 def newest(trainer: str = "train_ppo_residual") -> Path:
@@ -64,8 +77,27 @@ def draw(fig, axes, runs: list[Path], labels: list[str]) -> None:
                 label="MPC на тих самих епізодах" if len(runs) == 1 else f"MPC ({label})",
             )
             bottom.plot(t, diff, color=color, lw=2, label=label)
+            held = [r for r in rows if f"holdout_{task}" in r]  # the deterministic policy on held-out episodes
+            if held:
+                th = [r["minutes"] for r in held]
+                red = RED if len(runs) == 1 else color  # several runs: each its own colour
+                top.plot(
+                    th,
+                    [r[f"holdout_{task}"] for r in held],
+                    color=red,
+                    lw=0,
+                    marker="o",
+                    ms=6,
+                    label="перевірка на 9001 (без шуму)",
+                )
+                bottom.plot(
+                    th, [r[f"holdout_{task}_minus_mpc"] for r in held], color=red, lw=1, marker="o", ms=6, ls=":"
+                )
             last = rows[-1][task]
-            latest.append(f"{rss[-1]:.3f} проти MPC {mpc[-1]:.3f} ({last.get('episodes', '?')} еп.)")
+            text = f"{rss[-1]:.3f} проти MPC {mpc[-1]:.3f} ({last.get('episodes', '?')} еп.)"
+            if held:
+                text += f"; 9001: {held[-1][f'holdout_{task}']:.3f} ({held[-1][f'holdout_{task}_minus_mpc']:+.3f})"
+            latest.append(text)
         title = task.capitalize() + (": " + "; ".join(latest) if latest else ": ще немає епізодів")
         top.set_title(title, loc="left", color=INK, fontsize=10)
         top.set_ylabel("score (останні епізоди)")
@@ -85,9 +117,14 @@ def main(
     labels: str | list | tuple | None = None,
     interval: float = 15,
     png: str | None = None,
+    theme: str = "dark",
 ) -> None:
     """Show ``runs`` (run folders, comma-separated; default: the newest train_ppo_residual run), redrawn every
-    ``interval`` seconds; with ``png``, write one picture there instead of opening a window."""
+    ``interval`` seconds; with ``png``, write one picture there instead of opening a window. ``theme``: dark or
+    light."""
+    global COLORS, INK, INK2, GRID, SURFACE, RED
+    COLORS, (INK, INK2, GRID, SURFACE) = THEMES[theme]
+    RED = HELD_OUT[theme]
     if runs is None:
         folders = [newest()]
     else:
@@ -105,6 +142,8 @@ def main(
             "ytick.color": INK2,
             "figure.facecolor": SURFACE,
             "axes.facecolor": SURFACE,
+            "savefig.facecolor": SURFACE,
+            "legend.labelcolor": INK2,
             "font.size": 9,
         }
     )
