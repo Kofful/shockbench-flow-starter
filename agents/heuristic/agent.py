@@ -22,6 +22,10 @@ PARAMS = {
     "safety_stock": 0.6,
     "warning_gain": 0.12,
     "terminal_gain": 0.08,
+    "reserve_gain": 0.1,
+    "fuel_reserve": 2.0,
+    "terminal_reserve": 2.0,
+    "service_reserve": 0.6,
 }
 if (HERE / "params.json").is_file():
     PARAMS |= json.loads((HERE / "params.json").read_text())
@@ -126,6 +130,13 @@ class Agent:
         )
         self.value = self._values()
         self.fleet_terms = self._fleet_terms()
+        self.terminal_rates = {}
+        # Alternative routes to the same grid do not multiply its fuel need.
+        for source, dest in sorted({(route[4], route[5]) for route in self.routes[: self.nflow]}):
+            grid = self.nodes[dest[0]].get("grid")
+            if grid and self.nodes[source[0]]["type"] == "terminal":
+                rate = grid["deliverable"] * grid["shares"].get(self.knames[source[1]], 0)
+                self.terminal_rates[source] = self.terminal_rates.get(source, 0) + rate
 
     def _fleet_terms(self):
         """Public extra-transit fleet terms, including divergence at a later strait."""
@@ -385,7 +396,11 @@ class Agent:
                 cost += (1 - opening) * attrs["queue_holding"].get(self.knames[k], [0, 0, 0])[wr]
             cost += float(PARAMS["warning_gain"]) * risk[edge, k] * max(float(mem["graph_now.c"][edge]), 1)
             travel += max(0, int(mem["graph_now.tau"][edge]))
-        return max(cap, 0), max(1, travel), max(cost, 0)
+        # Dispatch precedes arrivals and production: a zero-transit fuel
+        # transfer can power its destination grid in this very week. Forcing
+        # a one-week delay starves the terminal/grid chain near the true end.
+        # Dispatch availability below still forbids same-week transshipment.
+        return max(cap, 0), travel, max(cost, 0)
 
     def _start(self, obs, week, H, risk, pending, ends):
         start, incoming = np.zeros(len(self.pairs)), np.zeros((H, len(self.pairs)))
@@ -588,6 +603,16 @@ class Agent:
                         rhs -= float(self.memory["backlog.qty"][d])
                     backlogs[d] = shortage
                 demand_rhs[h, p] = rhs
+            if float(PARAMS["reserve_gain"]) > 0:
+                for p, pair in enumerate(self.pairs):
+                    target = self._reserve(pair, demand[:, h], week + h)
+                    if target > 0:
+                        # Maintaining stocks only at the far window end lets
+                        # current fuel and service inventory repeatedly drain.
+                        # Slack makes reserves optional when serving another
+                        # urgent need has greater marginal value.
+                        slack = lp.var(float(PARAMS["reserve_gain"]) * self.value.get(pair, 0))
+                        lp.row([(inventory[h, p], -1), (slack, -1)], -target)
         for (_, e), terms in network_edges.items():
             lp.row(terms, self.memory["graph_now.u"][e])
         for (h, c, pool), terms in network_pools.items():
@@ -634,6 +659,28 @@ class Agent:
                 else:
                     override[slots] = 0
         return {"flows": flows, "override_qty": override, "release_mode": modes}
+
+    def _reserve(self, pair, demand, week):
+        """Soft weekly reserves, never mandatory infeasible stock constraints."""
+        n, k = pair
+        node, name = self.nodes[n], self.knames[k]
+        if pair in self.demands:
+            d = self.demands.index(pair)
+            return min(self.storage[self.pindex[pair]], float(PARAMS["service_reserve"]) * demand[d])
+        if "grid" in node:
+            if week == self.T:
+                return 0.0
+            grid = node["grid"]
+            burn = grid["shares"].get(name, 0) * grid["deliverable"]
+            threshold = (
+                self.instance["params"]["psi"] * grid["ibar"].get(name, 0) if name == grid.get("rationed") else 0.0
+            )
+            return min(self.storage[self.pindex[pair]], threshold + float(PARAMS["fuel_reserve"]) * burn)
+        if node["type"] == "terminal":
+            remaining = min(float(PARAMS["terminal_reserve"]), max(0, self.T - week))
+            rate = self.terminal_rates.get(pair, 0)
+            return min(self.storage[self.pindex[pair]], remaining * rate)
+        return 0.0
 
     def _buffer(self, pair, demand, obs):
         n, k = pair

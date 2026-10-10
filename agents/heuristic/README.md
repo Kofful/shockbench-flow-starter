@@ -18,6 +18,31 @@ plan. Stock dispatched today cannot use supplies or ordinary arrivals that only
 become available later today. Pipeline arrivals and WIP maturity are scheduled
 by their observed weeks. Fab, packaging and fuel constraints link the stages.
 
+Zero-transit transfers arrive before current-week production. In particular,
+terminal-to-grid fuel can power the grid immediately, including in the final
+week. The planner no longer inserts a fictitious one-week delay on these
+routes. It plans their replenishment throughout the episode, not just after
+terminal stocks are already empty. Gas rationing still depends on the previous
+week's grid stock; newly arriving fuel does not bypass that constraint.
+
+The planner now values reserves in **every** planned week, not only at the
+artificial end of its horizon. Default soft targets are two weeks of nominal
+fuel generation at grids (plus the LNG rationing threshold), two weeks at
+their supplying terminals, and 0.6 weeks of forecast demand at sinks. Targets
+are capped by storage. The LP penalizes missed targets at 10% of the commodity's
+downstream marginal value; slack allows urgent service to take priority when
+stocks or routes are constrained. This is not a blanket multiplier on every shipment.
+These penalties are planning preferences, not additional simulator costs.
+Terminal targets shrink near the true episode end; grid/terminal reserves
+are zero after the final week's consumption. Sink reserves still protect
+against final-week forecast error. Alternative routes to the same grid do
+not multiply its consumption estimate.
+
+These four settings are `reserve_gain`, `fuel_reserve`, `terminal_reserve`
+and `service_reserve` in `params.json`. Set `reserve_gain` to zero to disable
+the weekly reserve incentive. Existing masks, dispatch availability,
+shared-capacity constraints and end-of-episode credit remain in force.
+
 ## Field coverage
 
 The reference is [docs/fields/small.md](../../docs/fields/small.md). Shapes and
@@ -101,5 +126,5 @@ masks, observation immutability and complete history. It does not calculate RSS;
 use paired `sbf compare` with exact references for performance decisions.
 
 Development outcomes and final measured comparisons are recorded in
-[agents/rl/LOG.md](../rl/LOG.md), section 19. All changes are local; no pytest,
+[agents/rl/LOG.md](../rl/LOG.md), sections 19–21. All changes are local; no pytest,
 `tests/` scripts, Codabench calls or PyPI modifications were used.

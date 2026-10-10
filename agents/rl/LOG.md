@@ -1238,3 +1238,440 @@ Commands used writable caches `UV_CACHE_DIR=/tmp/sbf-uv-cache` and
 `MPLCONFIGDIR=/tmp/sbf-matplotlib`. Lint, formatting and `git diff --check`
 were run on changed source. No pytest, `tests/` scripts, Codabench mocks,
 uploads, dependency upgrades, PyPI publication or `.venv` edits occurred.
+
+## 20. Correct zero-transit fuel timing at the episode end (2026-10-10)
+
+### 20.1 Request, diagnosis and baseline
+
+The participant asked to remove avoidable end-of-episode excess from the
+heuristic, following the final-week spike in the Full comparison dashboard.
+The matched baseline is Full, standard regime, root 0, episode 1, policy seed
+0, in `outputs/09_compare_plans/2026-10-09_22-15-33/`. Its scenario hash is
+`b0518c7bd5e03119b31e114244b2add6adb7d6df21b6dbac783d1e9e636619fb`.
+Saved the pre-change agent from Git HEAD to
+`outputs/heuristic_end_fix/before/agent.py` using apply_patch, so independent
+paired comparisons use the immediate previous policy, not the much older
+baseline from section 19. The worktree was clean before this change.
+
+Read the route LP, inventory/dispatch constraints, energy allocation and
+installed simulator ordering. The heuristic's `_route` returned
+`max(1, travel)` even for public zero-transit terminal-to-grid fuel edges.
+The simulator dispatches first, then adds arrivals, then burns fuel for
+generation: these transfers really can supply the current week. The false
+delay made the LP undervalue final-week generation and plan terminal/grid
+replenishment incorrectly before the end. All terminal fuel stocks were
+already empty at the beginning of the baseline final week, so fixing only
+the final action would be too late.
+
+The earlier diagnosis also identified real US/India generation shocks during
+the final week. A positive final-week cost remains even in the clairvoyant
+solution; no artificial zero-loss terminal reward or scenario-specific action
+was added. Scenario truth was used only for offline diagnosis, never as an
+agent input.
+
+### 20.2 Implementation
+
+Changed `agents/heuristic/agent.py` to return the accumulated nonnegative
+transit time, preserving zero rather than clamping it to one. Waiting for an
+announced reopening still contributes to travel; positive-transit routes and
+blocked-route handling are unchanged. This correction applies throughout
+every episode, so the rolling planner can prepare fuel stocks before the final
+week instead of adding a last-week-only patch.
+
+The existing LP now places zero-transit cargo into the current-week inventory
+balance before production. Its separate dispatch-stock constraint still
+prevents ordinary same-week arrivals, supply lifts and new zero-transit
+arrivals from being redispatched at an intermediate node. Gas rationing
+continues to use previous-week grid stock, as the simulator does, rather than
+allowing fresh arrivals to bypass the threshold. Horizon shrinking, stock
+salvage, masks and release legality were not changed.
+
+Updated `agents/heuristic/README.md` to explain the corrected ordering and
+these constraints. No dependency, installed benchmark, training or weights
+were changed. The fix needs only the usual public observations and metadata;
+no new configuration parameters are required.
+
+### 20.3 Focused checks and measured dashboard outcome
+
+Ran direct in-process regression checks, not pytest or files under `tests/`.
+A synthetic final-week case based on the recorded Full observation supplies
+10,000 units of crude at the US terminal and none at its grid. To isolate
+current-week generation from terminal-credit/holding degeneracy, the final
+check sets synthetic salvage, holding and disposal to zero, removes storage
+caps, and sets positive freight of $1,000 per unit on the zero-transit edge.
+The old model then requests zero, whereas the corrected model requests
+637.952846 units with zero solver fallbacks. Old/new modeled transit is
+one/zero weeks. These artificial economics are only a mechanics regression,
+not evaluation settings or tuning data.
+
+Two initial variants incorrectly assumed that the old model would always
+request zero even with free transport or salvage: it requested 10,000 units
+in those variants. Corrected the *diagnostic assumption*, not the policy;
+late cargo can have terminal-credit value or be an LP tie even when the old
+model cannot use it for generation.
+
+A second regression starts the terminal empty with 10,000 units scheduled to
+arrive there this week. The corrected model requests zero terminal-to-grid
+redispatch, and has no fallback. Also checked that all feasible strictly
+positive-transit paths retain positive lead time.
+
+Re-ran the complete updated heuristic from week 1 on the exact dashboard
+scenario, not just its last 12 weeks. Generated the three-plan dashboard,
+NPZ records and cost/quantity/route CSVs at
+`outputs/heuristic_end_fix/full_episode1_dashboard/`. Scenario hashes match;
+the dashboard's simulator validity and LP accounting reconciliation passed.
+Quick affects only the rough naive reference; the oracle is solved exactly.
+
+| Metric, same Full scenario | Before | After | Reduction |
+| --- | ---: | ---: | ---: |
+| Final-week net cost | $166.700851B | $131.508355B | $35.192496B (21.11%) |
+| Final-week power shed | $148.195157B | $114.321511B | $33.873646B |
+| Final-week shortage | $19.687031B | $18.368633B | $1.318398B |
+| Total episode net cost | $7,620.960758B | $7,576.677914B | $44.282844B |
+
+The exact clairvoyant final-week net cost is $117.046184B; the update closes
+about 70.9% of the original final-week net-cost gap on this scenario. A
+$14.462171B final-week gap remains. Imperfect production/queue/future-shock
+modeling can still cause excess; this change does not establish that all
+avoidable losses have disappeared or that Full RSS is 0.8–0.9. The separate
+earlier last-12-week-only counterfactual is not the full-episode result above.
+
+The detailed CSV shows that final-week shed now matches the oracle (up to
+rounding) on Taiwan, Korea, China, Japan, India and Southeast Asia. Residual
+excess shed is concentrated in the US ($7.538989B) and EU ($1.282129B).
+Those gaps remain follow-up model-fidelity work, not a plotting correction or
+evidence that the remaining cost is entirely unavoidable.
+
+### 20.4 Submission checks and reproducible commands
+
+Isolated submission checks passed on Small (max/week 1 0.238 CPU seconds,
+median 0.1392) and Full (week 1 0.670, median 0.5478, max 0.738), against
+2/4-second limits. These are local measurements, not Docker/server timings.
+Ruff lint and format checks passed for the changed agent source.
+
+A complete independent Tiny episode (root 20261013, episode 0) passed the
+diagnostics script's shape/dtype, finite/nonnegative action, mask, observation
+immutability, simulator validity and 26-week history checks. Cost was
+$522,003,670.54, internal solver fallbacks zero, maximum weekly CPU 0.121
+seconds. These costs cannot be compared with a different network/scenario.
+The record and summary are in `outputs/heuristic_end_fix/tiny_diagnostics/`.
+
+Commands use `UV_CACHE_DIR=/tmp/sbf-uv-cache` and
+`SBF_CACHE_DIR=/tmp/sbf-ppo-cache`; rendering also uses
+`MPLCONFIGDIR=/tmp/sbf-matplotlib`:
+
+```bash
+uv run --no-sync sbf check heuristic --task=small
+uv run --no-sync sbf check heuristic --task=full
+uv run --no-sync python examples/10_heuristic_diagnostics.py --task=tiny \
+  --episodes=1 --entropy=20261013 --out=outputs/heuristic_end_fix/tiny_diagnostics
+uv run --no-sync python examples/09_compare_plans.py --agent=heuristic \
+  --task=full --entropy=0 --episode=1 --quick --audit_weeks=0 \
+  --out=outputs/heuristic_end_fix/full_episode1_dashboard
+uv run --no-sync sbf compare heuristic outputs/heuristic_end_fix/before \
+  --task=full --episodes=8 --entropy=20261013 --quick --n_jobs=2 --cpu_budget \
+  --out=outputs/heuristic_end_fix/full_independent_quick.json
+uv run --no-sync sbf compare heuristic outputs/heuristic_end_fix/before \
+  --task=small --episodes=16 --entropy=20261013 --n_jobs=2 --cpu_budget \
+  --out=outputs/heuristic_end_fix/small_independent.json
+uv run --no-sync ruff check agents/heuristic/agent.py
+uv run --no-sync ruff format --check agents/heuristic/agent.py
+git diff --check
+```
+
+Independent comparisons use a new root, 20261013, and identical scenarios for
+both versions. Full uses quick reference quantiles and is explicitly not a
+board-quality score; Small uses exact references. No pytest, `tests/` scripts,
+Codabench mocks/uploads, PyPI writes or `.venv` modifications were performed.
+
+### 20.5 Independent paired results
+
+The eight-scenario Full quick comparison completed with updated score
+0.677274684 versus 0.637656999 for the preserved immediate baseline. The
+paired gain is 0.039617685, with a 90% interval [0.027265519, 0.050927170].
+Mean episode cost fell from $6,253,020,166,997.27 to $6,125,129,995,689.77
+(2.0453%). Cost decreased on all eight paired scenarios. Both versions had
+zero scorer fallback weeks and zero over-budget CPU weeks. This is stronger
+evidence than the selected dashboard case, but eight episodes with rough
+naive quantiles and no harm strata are still not a Full leaderboard result.
+Saved the full comparison, per-scenario costs and settings in
+`outputs/heuristic_end_fix/full_independent_quick.json`.
+
+The exact Small run needed fresh reference-cache preparation (its 1,000-draw
+naive quantiles took 343.5 seconds before harm cut points and episode
+references). Offered to hand off the already-completed checks/Full results or
+wait for Small; the participant explicitly chose to wait. No further policy
+changes were made while those paired evaluations were running.
+
+Inspected the installed reference-generation path read-only to explain the
+delay: exact evaluation computes 2,000 public harm-threshold draws before
+the scenario references. A separate one-draw timing probe took 1.534 wall
+seconds. Its first invocation used the wrong `shockbench_flow.tasks` import;
+corrected that diagnostic to `shockbench_flow.hosting.tasks`. This probe does
+not change the policy or replace any scored reference.
+
+The exact 16-scenario Small comparison completed after that preparation.
+Updated score is 0.692273445 versus 0.653835761 for the immediate baseline;
+paired gain 0.038437684, 90% interval [0.031444032, 0.046626510]. Mean
+episode cost fell from $2,433,996,171,224.08 to $2,386,331,777,818.50
+(1.9583%). Cost decreased on all 16 paired scenarios, with savings from
+$3.112185B to $78.599165B. Both versions had zero scorer fallback weeks and
+zero over-budget CPU weeks. The run uses standard exact references and harm
+thresholds (`quick=False`), but the reported score is overall-episode RSS
+(`pooled=False`), not a full harm-stratified leaderboard estimate. No tuning
+followed either independent comparison. Saved the per-episode comparison in
+`outputs/heuristic_end_fix/small_independent.json`.
+
+All final dashboard, compatibility diagnostic, submission-check and paired
+comparison runs finished successfully. Final lint/format and `git diff --check` passed; only
+the heuristic source, its README and this log have tracked changes. No claim
+is made that the remaining US/EU end-week excess has been eliminated.
+
+## 21. Full service-loss refinement (2026-10-10)
+
+### 21.1 Request, baseline and diagnosis
+
+The participant requested reducing shed and shortages toward the clairvoyant
+reference, with the strongest attainable improvement on Full. Preserved the
+exact current heuristic (including section 20's zero-transit correction) in
+`outputs/heuristic_service_fix/before/agent.py`. The earlier source, README
+and log changes were left intact. No dependency/package changes, PyPI writes,
+uploads, Codabench mocks, pytest or scripts under `tests/` are permitted/used.
+
+Inspected the standalone planner, Full field documentation, public static
+network, installed simulator's dispatch/production/energy rules, public
+forecast implementation and the existing three-plan Full episode-1 records.
+These are read-only diagnostics; hidden episode marks and oracle actions are
+not inputs to the agent. In the existing example, shortage cost is $1,822.65B
+against $1,235.30B for the oracle, whereas shed is $5,715.10B against
+$5,675.76B. Major shortage gaps are China mature chips, SEA leading chips,
+US leading chips and other mature-chip sinks. Several energy-limited fabs
+have large wafer stocks but little actual output. Simply sending more wafer
+cannot fix a grid with no industrial headroom.
+
+Identified model risks: reserves are predominantly rewarded at the artificial
+end of the planning window, the LP chooses fuel segments independently even
+though the simulator burns available segments pro rata, industrial production
+can displace base load in the LP even at `base_first` grids, and observed
+generation impairments are persisted over the entire future horizon. Public
+forecasts have roughly 9–11% one-week relative error in this example, making
+zero-inventory just-in-time service risky where spare capacity exists.
+
+Two initial record-inspection commands guessed incorrect `FlatLayout` import
+locations; corrected to `shockbench_flow.information.flat`. A read of a guessed
+disruption scenario path failed; used the actual `policies/scenarios.py`.
+These diagnostic mistakes did not change any policy or evaluation data.
+
+### 21.2 Controlled candidate experiments
+
+Added configurable candidate mechanisms: soft weekly fuel/terminal/service
+inventory targets, proportional fuel-use planning, a base-first industrial
+headroom constraint and future generation mean reversion. Experiments are on
+an independent tuning root, 20261016, not dev root 0. Candidate mechanisms
+start disabled until their actual full-episode costs are measured; infeasible
+reserve targets use penalized slack, not hard constraints or oracle input.
+
+Created a local experiment harness and parameter files under
+`outputs/heuristic_service_fix/`. It plays complete standard-regime episodes,
+collects actual eight-component USD costs, maximum weekly CPU, internal solver
+fallbacks and invalid actions. It does not calculate RSS or substitute its own
+scoring references. Its first parallel invocation failed because spawned
+workers had not imported the environment registration module. Corrected by
+importing it inside the worker; reran the experiment. No tests were involved.
+
+### 21.3 Selection results and rejected alternatives
+
+The first two tuning episodes favored weekly reserves; a rigid equality tying
+all fuel burn to fixed shares was disastrous when one fuel was unavailable:
+mean cost $13.257T against the baseline's $5.955T. Removed that mechanism.
+Also tried a softer load-factor/segment-deficit model, first-week common fab
+production ratios and automatic OSAT starts, base-first industrial headroom,
+four-week generation recovery, normal-approximation shortage bands, larger
+fuel targets and a 32-week horizon. The experimental source snapshots and
+parameter/result JSON files remain in `outputs/heuristic_service_fix/v2/`,
+`v3/`, `variants_1.json` through `variants_6.json`, and `sweep_*.json`.
+
+Expanded three finalists and the immediate baseline to tuning episodes 0–3
+of root 20261016. Selection uses actual total episode cost, not just shed:
+
+| Candidate | Mean total USD | Mean shed USD | Mean shortage USD | Internal planner fallbacks |
+| --- | ---: | ---: | ---: | ---: |
+| Immediate baseline | $5,114.377B | $2,652.724B | $2,414.850B | 0 |
+| Smaller reserves + recovery | $4,943.390B | $2,531.570B | $2,364.521B | 0 |
+| Two-week fuel/terminal, 0.6-week service | $4,923.613B | $2,493.464B | $2,382.366B | 0 |
+| Same reserves, 32-week horizon | $4,924.046B | $2,493.205B | $2,384.577B | 1 |
+
+Retained the simplest lowest-cost finalist: a 24-week horizon with
+`reserve_gain=0.1`, `fuel_reserve=2`, `terminal_reserve=2` and
+`service_reserve=0.6`. Across these four tuning scenarios, mean total cost
+decreased 3.7300% ($190.764B), shed 6.0036% and shortage 1.3452%.
+All four paired costs decreased. The differences between neighboring
+candidates are small, so this is a selected candidate, not a claim of a
+globally optimal parameter set. Three-/four-week fuel buffers reduced shed
+more but worsened shortages, and had higher total mean cost on the initial
+two episodes. The other experimental mechanisms were removed from the
+submission rather than being enabled on the basis of unproven benefits.
+
+### 21.4 Final implementation and mechanical checks
+
+Added optional weekly reserve-shortfall variables to the LP inventory rows.
+Their penalty is 10% of the existing downstream marginal value, making
+pre-positioning beneficial without forcing infeasible inventory or overriding
+higher-valued immediate service. Each target is capped by public storage.
+Grid fuel targets include two weeks of nominal segment burn plus the existing
+gas rationing threshold; terminals cover two weeks of unique downstream-grid
+fuel consumption. Sinks cover 0.6 weeks of the history-calibrated forecast.
+Terminal targets taper to remaining weeks. Final-week grid/terminal targets
+are zero; final-week sink protection remains because realized demand is noisy.
+This preserves the section-20 zero-transit correction, actual dispatch stock
+availability, masks, fleet/route constraints, previous-stock gas rationing
+and true terminal credit. Fab/OSAT input stocks are not blindly inflated.
+
+Cached terminal fuel rates at construction and deduplicated source/destination
+pairs so alternative routes do not multiply consumption. The local
+`verify_reserves.py` checks Tiny/Small/Full storage bounds, service targets,
+final-week taper, zero-transit semantics and rate calculation, including a
+synthetic duplicated route in a private config copy. No synthetic config is
+used in any score. All checks passed.
+
+A solver-options diagnostic showed that requesting HiGHS `threads=1` after
+its SciPy scheduler was initialized with automatic threads returns status 4;
+the same option works when first to initialize it. Because evaluation may
+already have initialized that scheduler through reference/nominal solves,
+did not change the submission's solver threading. Some initial parallel
+experimental runs had an internal timeout/fallback (recorded in their JSON),
+but the selected finalist's four tuning episodes did not. Ruff formatting
+initially reported the new source needed formatting; formatted it and lint
+passed. No claim is made that every rejected diagnostic run succeeded.
+
+Isolated scorer-style checks passed: Full week 1 0.567 CPU seconds, median
+0.4576, maximum 0.577 (budget 4 seconds); Small week 1/maximum 0.233,
+median 0.1357 (budget 2 seconds). These are local, not Docker/server timings.
+The check tool's generic suggestion to upload was not acted on.
+
+A complete Small diagnostics episode on fresh root 20261018 passed action
+shape/dtype/finiteness/sign, mask, observation immutability, simulator-validity
+and full-history assertions. Cost $3,000,307,804,151.24, maximum weekly CPU
+0.269 seconds, internal fallbacks zero; this standalone cost is not RSS.
+Records are in `outputs/heuristic_service_fix/small_diagnostics/`.
+
+### 21.5 Same-scenario three-plan dashboard
+
+Replayed the final submission from week 1 on the previous Full screenshot's
+root-0 episode 1, with exactly the same scenario hash
+`b0518c7bd5e03119b31e114244b2add6adb7d6df21b6dbac783d1e9e636619fb`.
+The oracle solve remained exact (19.79 seconds); naive quantiles were the
+same rough two-draw setting as the prior dashboard, not a board reference.
+
+| Metric | Immediate baseline | Updated | Exact oracle |
+| --- | ---: | ---: | ---: |
+| Episode total | $7,576.678B | $7,433.421B | $6,948.111B |
+| Episode shed | $5,715.102B | $5,588.897B | $5,675.757B |
+| Episode shortage | $1,822.653B | $1,804.219B | $1,235.298B |
+| Final-week net | $131.508B | $122.542B | $117.046B |
+| Final-week shed | $114.322B | $105.500B | $105.500B |
+
+Episode savings are $143.256897B (1.8908%). Final shed now agrees with the
+oracle within about $1,307 on a $105.5B total, including elimination of the
+previously residual US/EU gap. The tiny remaining difference is at China
+(0.000317 generation units); the other seven grids match exactly.
+Episode shed is actually lower than the oracle: the oracle can trade extra
+base-load shed for more industrial output. Lower shed alone is not the
+scoring target, and the remaining $568.921B shortage excess is substantial.
+This change does not eliminate unobserved-shock losses, real capacity
+shortfalls or the simulator/oracle production-control difference.
+The refreshed HTML/PNG/NPZ/CSV dashboard is
+`outputs/heuristic_service_fix/full_episode1_dashboard/index.html`.
+
+### 21.6 Independent holdout and reproducible commands
+
+Froze the selected source before looking at holdout results. Prepared 16
+new Full scenarios on root 20261017 using the package's explicit
+`EpisodeSet.build(..., fq_replications=1000, cut_draws=0)` option. This keeps
+standard exact-cost naive/oracle references but omits expensive 2,000-draw
+harm-stratum thresholds. The package consequently labels the score
+non-board/quick; it must not be described as a harm-pooled leaderboard score
+or as a two-replication naive approximation. No reference/scoring formula
+was modified. The completed paired results are recorded below.
+
+Reproducible commands (use `UV_CACHE_DIR=/tmp/sbf-uv-cache`,
+`SBF_CACHE_DIR=/tmp/sbf-ppo-cache`, and for rendering
+`MPLCONFIGDIR=/tmp/sbf-matplotlib`):
+
+```bash
+# Initial ablations: substitute N=1,2,3,4,5 for each saved parameter file.
+uv run --no-sync python outputs/heuristic_service_fix/sweep.py \
+  --variants=outputs/heuristic_service_fix/variants_1.json \
+  --out=outputs/heuristic_service_fix/sweep_1.json --jobs=3
+# Finalists on additional tuning episodes, never the holdout root.
+uv run --no-sync python outputs/heuristic_service_fix/sweep.py \
+  --variants=outputs/heuristic_service_fix/variants_6.json \
+  --out=outputs/heuristic_service_fix/sweep_6.json --start=2 --episodes=2 --jobs=3
+uv run --no-sync python outputs/heuristic_service_fix/verify_reserves.py
+uv run --no-sync sbf check heuristic --task=full
+uv run --no-sync sbf check heuristic --task=small
+uv run --no-sync python examples/10_heuristic_diagnostics.py \
+  --task=small --entropy=20261018 --episodes=1 \
+  --out=outputs/heuristic_service_fix/small_diagnostics
+uv run --no-sync python examples/09_compare_plans.py --agent=heuristic \
+  --task=full --episode=1 --entropy=0 --quick --audit_weeks=0 \
+  --out=outputs/heuristic_service_fix/full_episode1_dashboard
+uv run --no-sync python outputs/heuristic_service_fix/compare_exact_references.py \
+  --task=full --episodes=16 --entropy=20261017 --n_jobs=2 \
+  --out=outputs/heuristic_service_fix/full_holdout.json
+uv run --no-sync ruff check agents/heuristic/agent.py
+uv run --no-sync ruff format --check agents/heuristic/agent.py
+git diff --check
+```
+
+Reference preparation was run separately before that paired comparison to
+avoid regenerating the same in-progress cache. The four tuning episodes use
+fixed local seed 0; the actual scorer-style folder comparison uses the
+submission-hash-salted seeds and CPU meter. The heuristic's decisions are
+deterministic; its seeded local RNG is not used to draw actions.
+
+### 21.7 Completed independent Full results and limitations
+
+The 16-scenario holdout completed successfully:
+
+| Metric | Updated | Immediate baseline |
+| --- | ---: | ---: |
+| Overall-episode RSS | 0.669635960 | 0.634008048 |
+| Mean episode cost | $6,496.056B | $6,611.365B |
+| Scorer fallback weeks | 0 | 0 |
+| Over-budget CPU weeks | 0 | 0 |
+| Invalid entries | 0 | 0 |
+
+Paired RSS improvement is **0.035627913**, 90% interval
+**[0.018913698, 0.053206132]**. All 2,000 resampled episode sets favored the
+updated version; this is a bootstrap result, not a guarantee or a Bayesian
+probability. Mean episode savings are $115.308838B (1.7441%). Eleven of sixteen
+individual costs improved; five worsened. The worst regression was $70.518573B
+(episode 14); the largest saving was $359.228525B (episode 11). Those five
+regressions demonstrate the real reserve-versus-service tradeoff, not a claim
+that more shipments help every scenario. No parameter adjustment followed
+these holdout results.
+
+Mean reference costs were $8,663.316B naive and $5,426.841B clairvoyant. The
+remaining updated cost gap is $1,069.215B per episode. RSS 0.8–0.9 is **not**
+achieved on this independent Full set. Further improvements need better
+automatic-production/energy prediction and shortage-aware allocation, rather
+than blindly increasing fuel/material buffers again.
+
+Results, all scenario costs, hashes, CPU/fallback/invalid/error counts and the
+exact-reference settings are saved in
+`outputs/heuristic_service_fix/full_holdout.json`. Its `quick=True` and
+`pooled=False` flags are the package's non-board classification for
+`cut_draws=0`. The generic CLI warning calls such a result a rough-naive quick
+score, but in this explicit configuration the saved `fq_replications=1000`
+shows that naive costs use the standard 1,000 replications; only harm-stratum
+thresholds/pooling were omitted. The source/scoring implementation was not
+patched to change this classification.
+
+Final Ruff lint/format and `git diff --check` passed. Only the heuristic
+source, its README and this log have tracked modifications (including the
+preserved previous section-20 changes). Experiment snapshots and reports are
+local gitignored artifacts. A documentation patch initially had a missing
+diff-line prefix and was rejected atomically; corrected and reapplied it.
+All final verification/evaluation processes finished. No pytest, `tests/`
+execution, PyPI/dependency modifications, `.venv` edits or uploads were made.
